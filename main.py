@@ -1,5 +1,6 @@
 import time
 import threading
+import uvicorn
 from typing import Any, Dict
 
 import config
