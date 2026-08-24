@@ -127,8 +127,55 @@ class NodeClient:
             return False
 
     def test_connection(self) -> Dict[str, Any]:
+        import time as _t
+        t0 = _t.time()
         ok = self.authenticate()
-        return {"ok": ok, "message": "Connected" if ok else "Auth failed"}
+        ms = round((_t.time() - t0) * 1000)
+        return {"ok": ok, "message": "Connected" if ok else "Auth failed", "latency_ms": ms}
+
+    def list_guests(self):
+        if not self.ticket and not self.authenticate():
+            return []
+        out = []
+        for kind in ("qemu", "lxc"):
+            try:
+                r = self.session.get(
+                    f"{self.base}/nodes/{self.node}/{kind}",
+                    headers=self._h(), cookies=self._c(), timeout=6,
+                )
+                if r.status_code != 200:
+                    continue
+                for g in r.json().get("data", []):
+                    out.append({
+                        "vmid": g.get("vmid"),
+                        "name": g.get("name") or str(g.get("vmid")),
+                        "type": kind,
+                        "status": g.get("status", "unknown"),
+                        "cpu": round(float(g.get("cpu", 0)) * 100, 1) if g.get("cpu") is not None else 0,
+                        "mem": round(float(g.get("mem", 0)) / 1024**3, 2) if g.get("mem") else 0,
+                        "maxmem": round(float(g.get("maxmem", 0)) / 1024**3, 2) if g.get("maxmem") else 0,
+                    })
+            except Exception as e:
+                log.debug("%s guests %s: %s", self.name, kind, e)
+        out.sort(key=lambda x: (0 if x["status"] == "running" else 1, x["vmid"] or 0))
+        return out
+
+    def guest_power(self, vmid: int, kind: str, action: str) -> bool:
+        if kind not in ("qemu", "lxc"):
+            return False
+        if action not in ("start", "stop", "shutdown", "reboot", "suspend", "resume"):
+            return False
+        if not self.ticket and not self.authenticate():
+            return False
+        try:
+            r = self.session.post(
+                f"{self.base}/nodes/{self.node}/{kind}/{vmid}/status/{action}",
+                headers=self._h(), cookies=self._c(), timeout=12,
+            )
+            return r.status_code in (200, 202)
+        except Exception as e:
+            log.error("Guest power %s %s/%s: %s", action, kind, vmid, e)
+            return False
 
 
 class ProxmoxManager:

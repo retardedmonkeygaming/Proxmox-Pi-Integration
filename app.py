@@ -1,4 +1,5 @@
 import csv
+import json
 import io
 import os
 import sqlite3
@@ -9,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Stre
 from fastapi.middleware.cors import CORSMiddleware
 
 import config
+import database
 from monitor import ProxmoxManager, NodeClient
 
 app = FastAPI(title="PVE Node Monitor")
@@ -50,7 +52,11 @@ def api_current():
         d = dict(r)
         ncfg = node_map.get(r["node_name"], {})
         d["ip"] = ncfg.get("ip", ""); d["node"] = ncfg.get("node", ""); d["type"] = ncfg.get("type", "server")
+        d["note"] = ncfg.get("note", ""); d["favorite"] = ncfg.get("favorite", False)
+        d["cpu_alert"] = ncfg.get("cpu_alert"); d["ram_alert"] = ncfg.get("ram_alert"); d["disk_alert"] = ncfg.get("disk_alert")
+        d["tags"] = ncfg.get("tags") or []
         out.append(d)
+    out.sort(key=lambda x: (0 if x.get("favorite") else 1, x.get("node_name") or ""))
     return out
 
 @app.get("/api/logs/server")
@@ -71,7 +77,12 @@ def api_power(node_name: str, action: str):
     mgr = ProxmoxManager(cfg["nodes"])
     client = mgr.get_client(node_name)
     if not client: return JSONResponse({"ok": False, "error": "not found"}, 404)
-    return {"ok": client.power(action)}
+    ok = client.power(action)
+    try:
+        database.log_activity(action, node_name, "web")
+    except Exception:
+        pass
+    return {"ok": ok}
 
 @app.post("/api/nodes/add")
 async def api_add_node(request: Request):
@@ -86,6 +97,10 @@ async def api_add_node(request: Request):
     if any(n["name"]==new["name"] for n in cfg["nodes"]):
         return JSONResponse({"ok": False, "error": "name already exists"}, 400)
     cfg["nodes"].append(new); config.save_config(cfg)
+    try:
+        database.log_activity("add_node", new["name"], "web")
+    except Exception:
+        pass
     return {"ok": True}
 
 @app.put("/api/nodes/{name}")
@@ -107,7 +122,12 @@ async def api_edit_node(name: str, request: Request):
 def api_delete_node(name: str):
     cfg = config.load_config()
     cfg["nodes"] = [n for n in cfg["nodes"] if n["name"] != name]
-    config.save_config(cfg); return {"ok": True}
+    config.save_config(cfg)
+    try:
+        database.log_activity("delete_node", name, "web")
+    except Exception:
+        pass
+    return {"ok": True}
 
 @app.post("/api/test-connection")
 async def api_test_connection(request: Request):
@@ -120,9 +140,9 @@ async def api_test_connection(request: Request):
 def api_get_settings():
     cfg = config.load_config()
     keys = ["buzzer_enabled","passive_buzzer_enabled","quiet_mode","compact_cards","flash_hostname",
-            "log_interval","cpu_alert","disk_alert","ram_alert","theme","graph_visible",
+            "log_interval","cpu_alert","disk_alert","ram_alert","theme","graph_visible","graph_range",
             "auto_refresh","standalone","has_lcd","has_touch","has_active_buzzer","has_passive_buzzer",
-            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval"]
+            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval","density","accent"]
     return {k: cfg.get(k) for k in keys}
 
 @app.post("/api/settings")
@@ -168,6 +188,205 @@ def api_lcd_action(action: str):
     elif action == "exit":
         lcd_state["in_settings"] = False; lcd_state["mode"] = "PAGES"
     return {"ok": True, "state": lcd_state}
+
+
+@app.get("/api/health")
+def api_health():
+    cfg = config.load_config()
+    return {
+        "ok": True,
+        "version": "1.7.0",
+        "nodes": len(cfg.get("nodes", [])),
+        "standalone": cfg.get("standalone", False),
+        "setup_done": cfg.get("setup_done", False),
+    }
+
+@app.get("/api/alerts")
+def api_alerts(limit: int = 50, unacked: int = 0):
+    return database.get_alerts(limit=limit, unacked_only=bool(unacked))
+
+@app.post("/api/alerts/ack")
+async def api_ack_alerts(request: Request):
+    data = await request.json() if request.headers.get("content-type","").startswith("application/json") else {}
+    database.ack_alert(alert_id=data.get("id"), node_name=data.get("node"))
+    # also silence hardware via flag
+    try:
+        open("/tmp/pve_alert_ack", "w").close()
+    except Exception:
+        pass
+    database.log_activity("ack_alert", data.get("node") or "all", "web")
+    return {"ok": True}
+
+@app.get("/api/activity")
+def api_activity(limit: int = 40):
+    return database.get_activity(limit)
+
+@app.get("/api/logs/range")
+def api_logs_range(range: str = "1h", node: str = None):
+    # approximate: 1h≈360 samples at 10s, 6h≈2160, 24h≈8640 — cap for perf
+    limits = {"1h": 120, "6h": 400, "24h": 900, "7d": 2000}
+    limit = limits.get(range, 120)
+    conn = get_db()
+    if node:
+        rows = conn.execute("""
+            SELECT timestamp, node_name, cpu_usage, ram_used_gb, disk_pct, net_in_kbps, net_out_kbps
+            FROM server_logs WHERE node_name=? ORDER BY id DESC LIMIT ?
+        """, (node, limit)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT timestamp, node_name, cpu_usage, ram_used_gb, disk_pct, net_in_kbps, net_out_kbps
+            FROM server_logs WHERE node_name IS NOT NULL AND node_name!='' 
+            ORDER BY id DESC LIMIT ?
+        """, (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in reversed(rows)]
+
+@app.get("/api/config/backup")
+def api_config_backup():
+    cfg = config.load_config()
+    # redact passwords partially
+    safe = dict(cfg)
+    safe_nodes = []
+    for n in cfg.get("nodes", []):
+        nn = dict(n)
+        if nn.get("password"):
+            nn["password"] = "***"
+        safe_nodes.append(nn)
+    safe["nodes"] = safe_nodes
+    return safe
+
+@app.post("/api/config/restore")
+async def api_config_restore(request: Request):
+    data = await request.json()
+    cfg = config.load_config()
+    # merge non-sensitive
+    for k in ("log_interval", "theme", "density", "cpu_alert", "ram_alert", "disk_alert",
+              "graph_visible", "graph_range", "auto_refresh", "quiet_mode", "flash_hostname",
+              "alert_repeat_sec", "confirm_power", "show_net_on_card", "accent"):
+        if k in data:
+            cfg[k] = data[k]
+    config.save_config(cfg)
+    database.log_activity("config_restore", "settings restored", "web")
+    return {"ok": True}
+
+
+
+@app.post("/api/nodes/{name}/meta")
+async def api_node_meta(name: str, request: Request):
+    data = await request.json()
+    cfg = config.load_config()
+    for n in cfg["nodes"]:
+        if n["name"] == name:
+            if "note" in data: n["note"] = str(data["note"])[:200]
+            if "favorite" in data: n["favorite"] = bool(data["favorite"])
+            if "tags" in data: n["tags"] = data["tags"] if isinstance(data["tags"], list) else []
+            for k in ("cpu_alert", "ram_alert", "disk_alert"):
+                if k in data:
+                    v = data[k]
+                    n[k] = None if v is None or v == "" else float(v)
+            config.save_config(cfg)
+            database.log_activity("node_meta", name, "web")
+            return {"ok": True}
+    return JSONResponse({"ok": False, "error": "not found"}, 404)
+
+
+@app.get("/api/nodes/{name}/guests")
+def api_guests(name: str):
+    cfg = config.load_config()
+    mgr = ProxmoxManager(cfg["nodes"])
+    client = mgr.get_client(name)
+    if not client:
+        return JSONResponse({"ok": False, "error": "not found"}, 404)
+    return {"ok": True, "guests": client.list_guests()}
+
+@app.post("/api/nodes/{name}/guests/{vmid}/{action}")
+def api_guest_power(name: str, vmid: int, action: str, kind: str = "qemu"):
+    cfg = config.load_config()
+    mgr = ProxmoxManager(cfg["nodes"])
+    client = mgr.get_client(name)
+    if not client:
+        return JSONResponse({"ok": False, "error": "not found"}, 404)
+    ok = client.guest_power(vmid, kind, action)
+    try:
+        database.log_activity(f"guest_{action}", f"{name} {kind}/{vmid}", "web")
+    except Exception:
+        pass
+    return {"ok": ok}
+
+@app.post("/api/power/bulk")
+async def api_power_bulk(request: Request):
+    data = await request.json()
+    action = data.get("action")
+    names = data.get("nodes") or []
+    if action not in ("shutdown", "reboot") or not names:
+        return JSONResponse({"ok": False, "error": "invalid"}, 400)
+    cfg = config.load_config()
+    mgr = ProxmoxManager(cfg["nodes"])
+    results = {}
+    for name in names:
+        client = mgr.get_client(name)
+        if not client:
+            results[name] = False
+            continue
+        results[name] = client.power(action)
+        try:
+            database.log_activity(f"bulk_{action}", name, "web")
+        except Exception:
+            pass
+    return {"ok": True, "results": results}
+
+
+
+@app.post("/api/nodes/import")
+async def api_import_nodes(request: Request):
+    data = await request.json()
+    nodes_in = data.get("nodes") or []
+    if not isinstance(nodes_in, list) or not nodes_in:
+        return JSONResponse({"ok": False, "error": "nodes array required"}, 400)
+    cfg = config.load_config()
+    existing = {n["name"] for n in cfg["nodes"]}
+    added = 0
+    for raw in nodes_in:
+        name = (raw.get("name") or "").strip()
+        ip = (raw.get("ip") or "").strip()
+        if not name or not ip or name in existing:
+            continue
+        cfg["nodes"].append({
+            "name": name,
+            "ip": ip,
+            "node": (raw.get("node") or name).strip(),
+            "user": (raw.get("user") or "root@pam").strip(),
+            "password": raw.get("password") or "",
+            "type": raw.get("type") or "server",
+            "note": raw.get("note") or "",
+            "favorite": bool(raw.get("favorite", False)),
+            "tags": raw.get("tags") or [],
+            "cpu_alert": raw.get("cpu_alert"),
+            "ram_alert": raw.get("ram_alert"),
+            "disk_alert": raw.get("disk_alert"),
+        })
+        existing.add(name)
+        added += 1
+    config.save_config(cfg)
+    try:
+        database.log_activity("import_nodes", f"added {added}", "web")
+    except Exception:
+        pass
+    return {"ok": True, "added": added}
+
+@app.get("/api/export/json")
+def api_export_json(range: str = "1h"):
+    limits = {"1h": 120, "6h": 400, "24h": 900, "7d": 2000}
+    limit = limits.get(range, 120)
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT timestamp, node_name, cpu_usage, ram_used_gb, ram_total_gb,
+               disk_pct, net_in_kbps, net_out_kbps, active_vms, online
+        FROM server_logs ORDER BY id DESC LIMIT ?
+    """, (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in reversed(rows)]
+
 
 # -------------------- SETUP FLOW --------------------
 
@@ -222,7 +441,7 @@ async def setup_pins_submit(request: Request):
     cfg["has_touch"] = form.get("has_touch") == "on"
     cfg["has_active_buzzer"] = form.get("has_active_buzzer") == "on"
     cfg["has_passive_buzzer"] = form.get("has_passive_buzzer") == "on"
-    cfg["buzzer_enabled"] = cfg["has_active_buzzer"]
+        cfg["buzzer_enabled"] = cfg["has_active_buzzer"]
     cfg["passive_buzzer_enabled"] = cfg["has_passive_buzzer"]
     # standalone if nothing selected
     any_hw = any([cfg["has_lcd"], cfg["has_touch"], cfg["has_active_buzzer"],
@@ -385,7 +604,7 @@ DASHBOARD_HTML = open("/home/workdir/artifacts/_dash_snippet.html").read() if Fa
 <title>PVE Node Monitor</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
-[data-theme="dark"]{--bg:#0a0a0a;--card:#141414;--text:#f3f4f6;--muted:#9ca3af;--border:#262626;--accent:#3b82f6;--green:#22c55e;--red:#ef4444;--orange:#f97316;--purple:#a855f7;--bar-bg:#1f1f1f;--lcd-bg:#051005;--lcd-text:#33ff66;--header-bg:#0f0f0f;--hover:#1a1a1a}
+[data-theme="dark"]{--accent-user:var(--accent);--bg:#0a0a0a;--card:#141414;--text:#f3f4f6;--muted:#9ca3af;--border:#262626;--accent:#3b82f6;--green:#22c55e;--red:#ef4444;--orange:#f97316;--purple:#a855f7;--bar-bg:#1f1f1f;--lcd-bg:#051005;--lcd-text:#33ff66;--header-bg:#0f0f0f;--hover:#1a1a1a}
 [data-theme="light"]{--bg:#f4f5f7;--card:#fff;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--accent:#2563eb;--green:#16a34a;--red:#dc2626;--orange:#ea580c;--purple:#7c3aed;--bar-bg:#e5e7eb;--lcd-bg:#0a1a0a;--lcd-text:#33ff66;--header-bg:#fff;--hover:#f9fafb}
 *{box-sizing:border-box;margin:0;padding:0}body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;min-height:100vh;padding-bottom:60px}
 header{background:var(--header-bg);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
@@ -428,15 +647,29 @@ canvas{width:100%!important;max-height:130px}
 .modal label{display:block;margin:10px 0 3px;font-size:.76rem;color:var(--muted);font-weight:500}.modal input{width:100%;padding:8px 11px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.92rem}
 .modal-actions{display:flex;gap:7px;margin-top:18px;align-items:center}.modal-actions .spacer{flex:1}.btn-cancel{background:var(--bg);border:1px solid var(--border);color:var(--text)}.btn-save{background:var(--accent);color:#fff}.btn-test{background:transparent;border:1px solid var(--border);color:var(--muted);font-size:.78rem;padding:7px 11px}
 footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border-top:1px solid var(--border);padding:9px 14px;text-align:center;font-size:.74rem;color:var(--muted);z-index:40}footer a{color:var(--accent);text-decoration:none;margin:0 5px}
-.hidden{display:none!important}.toast{position:fixed;bottom:68px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);color:var(--text);padding:9px 16px;border-radius:9px;font-size:.82rem;z-index:300;opacity:0;transition:opacity .25s;pointer-events:none}.toast.show{opacity:1}
+.hidden{display:none!important}
+.empty-state{text-align:center;padding:48px 20px;color:var(--muted)}
+.empty-state h3{color:var(--text);margin-bottom:8px}
+@media(max-width:640px){
+  header{flex-wrap:wrap;gap:8px;padding:10px 12px}
+  .brand{order:-1;width:100%;text-align:center}
+  .header-right{width:100%;justify-content:center;flex-wrap:wrap}
+  #nodeSearch{width:100px}
+  .main{padding:0 10px;margin:16px auto}
+  .node-card .actions{flex-wrap:wrap}
+}
+.toast{position:fixed;bottom:68px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);color:var(--text);padding:9px 16px;border-radius:9px;font-size:.82rem;z-index:300;opacity:0;transition:opacity .25s;pointer-events:none}.toast.show{opacity:1}
 </style></head>
 <body>
 <header>
   <div style="width:160px"></div>
   <div class="brand"><div class="desk">Desk Console</div><h1>PVE Node Monitor</h1></div>
   <div class="header-right">
+    <input id="nodeSearch" placeholder="Search nodes…" oninput="filterNodes()" style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 10px;font-size:.8rem;width:140px">
     <span class="pill" id="onlinePill">–/– online</span>
     <button class="btn btn-primary" onclick="openAddModal()">+ Add node / server</button>
+    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openBulk()" title="Bulk power">Bulk</button>
+    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openImport()" title="Import">Import</button>
     <button class="btn-ghost" onclick="openSettings()" title="Settings">⚙</button>
     <button class="btn-ghost" id="themeBtn" onclick="toggleTheme()" title="Theme">☾</button>
     <button class="btn-ghost" onclick="load()" title="Refresh">↻</button>
@@ -458,13 +691,23 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
       </div>
     </div>
     <div class="side-card">
-      <h3>Alerts</h3>
+      <h3>Alerts <button class="btn btn-ghost" style="float:right;width:auto;padding:2px 8px;font-size:.7rem" onclick="ackAll()">Ack all</button></h3>
       <div class="alert-box" id="alertStatus">Quiet. Thresholds fire on the LCD and buzzer.</div>
+      <div id="alertList" style="margin-top:8px;font-size:.72rem;color:var(--muted);max-height:100px;overflow-y:auto"></div>
+    </div>
+    <div class="side-card">
+      <h3>Activity</h3>
+      <div id="activityList" style="font-size:.72rem;color:var(--muted);max-height:90px;overflow-y:auto"></div>
     </div>
   </div>
   <div class="graphs-wrap">
     <div class="graphs-head"><div><h2>Graphs</h2><div class="sub">Live samples from the active node</div></div>
-      <button class="btn btn-ghost" style="width:auto;padding:5px 11px;font-size:.78rem" onclick="openGraphEdit()">✎ Edit</button></div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="graphRange" onchange="changeRange()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:.78rem">
+          <option value="1h">1h</option><option value="6h">6h</option><option value="24h">24h</option><option value="7d">7d</option>
+        </select>
+        <button class="btn btn-ghost" style="width:auto;padding:5px 11px;font-size:.78rem" onclick="openGraphEdit()">✎ Edit</button>
+      </div></div>
     <div class="graphs-grid">
       <div class="chart-box" id="cCpu"><h4>CPU</h4><canvas id="chartCpu"></canvas></div>
       <div class="chart-box" id="cRam"><h4>RAM</h4><canvas id="chartRam"></canvas></div>
@@ -474,7 +717,7 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   </div>
 </div>
 <footer>Insta: <a href="https://instagram.com/vxprxx" target="_blank">vxprxx</a> · GitHub: <a href="https://github.com/retardedmonkeygaming" target="_blank">retardedmonkeygaming</a>
-<br><span style="font-size:.68rem;opacity:.65">PVE Node Monitor · v1.6</span></footer>
+<br><span style="font-size:.68rem;opacity:.65">PVE Node Monitor · v1.9</span></footer>
 
 <div class="drawer-bg" id="drawerBg" onclick="closeSettings()"></div>
 <div class="drawer" id="drawer">
@@ -493,10 +736,23 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   <div class="set-group"><label>CPU alert %</label><input class="set-input" type="number" id="sCpu" min="1" max="100"></div>
   <div class="set-group"><label>Disk alert %</label><input class="set-input" type="number" id="sDisk" min="1" max="100"></div>
   <div class="set-group"><label>RAM alert %</label><input class="set-input" type="number" id="sRam" min="1" max="100"></div>
+  <div class="set-group"><label>Accent color</label>
+    <input class="set-input" type="color" id="sAccent" value="#3b82f6" style="height:36px;padding:2px">
+  </div>
+  <div class="set-group"><label>Density</label>
+    <select class="set-input" id="sDensity">
+      <option value="comfortable">Comfortable</option>
+      <option value="compact">Compact</option>
+      <option value="dense">Dense</option>
+    </select>
+  </div>
   <div class="drawer-actions">
     <button class="btn-cancel" onclick="testBuzzer()">Test buzzer</button>
     <button class="btn-primary" onclick="saveAllSettings()">Save settings</button>
     <button class="btn-cancel" onclick="exportCsv()">Export CSV</button>
+    <button class="btn-cancel" onclick="backupConfig()">Backup config</button>
+    <button class="btn-cancel" onclick="restoreConfig()">Restore config</button>
+    <button class="btn-cancel" onclick="exportJson()">Export JSON</button>
   </div>
 </div>
 
@@ -519,6 +775,51 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   <div class="set-row"><label>Disk</label><button class="toggle" id="gDisk" onclick="toggleGraph(this,'disk')"></button></div>
   <div class="modal-actions"><div class="spacer"></div><button class="btn btn-save" onclick="closeGraphEdit()">Done</button></div>
 </div></div>
+
+<div class="modal-bg" id="guestModal"><div class="modal" style="max-width:520px">
+  <h2 id="guestTitle">Guests</h2>
+  <div class="sub" id="guestSub">VMs & containers</div>
+  <div id="guestList" style="max-height:360px;overflow-y:auto;font-size:.85rem"></div>
+  <div class="modal-actions"><div class="spacer"></div>
+  <button class="btn btn-cancel" onclick="closeGuests()">Close</button></div>
+</div></div>
+<div class="modal-bg" id="bulkModal"><div class="modal">
+  <h2>Bulk power</h2>
+  <div class="sub">Select nodes then reboot or shutdown</div>
+  <div id="bulkList" style="max-height:240px;overflow-y:auto;margin:12px 0"></div>
+  <div class="modal-actions">
+    <button class="btn btn-reboot" onclick="bulkPower('reboot')">Reboot selected</button>
+    <button class="btn btn-shutdown" onclick="bulkPower('shutdown')">Shutdown selected</button>
+    <button class="btn btn-cancel" onclick="closeBulk()">Cancel</button>
+  </div>
+</div></div>
+
+<div class="modal-bg" id="detailModal"><div class="modal" style="max-width:440px">
+  <h2 id="detailTitle">Node</h2>
+  <div class="sub" id="detailSub"></div>
+  <label>Note</label><input id="dNote">
+  <label>Tags (comma-separated)</label><input id="dTags" placeholder="prod, lab">
+  <div class="row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
+    <div><label>CPU alert %</label><input id="dCpu" type="number" placeholder="global"></div>
+    <div><label>RAM alert %</label><input id="dRam" type="number" placeholder="global"></div>
+    <div><label>Disk alert %</label><input id="dDisk" type="number" placeholder="global"></div>
+  </div>
+  <div class="modal-actions" style="margin-top:16px">
+    <button class="btn btn-ghost" style="width:auto" onclick="openGuests(detailName)">Guests</button>
+    <div class="spacer"></div>
+    <button class="btn btn-cancel" onclick="closeDetail()">Close</button>
+    <button class="btn btn-save" onclick="saveDetail()">Save</button>
+  </div>
+</div></div>
+<div class="modal-bg" id="importModal"><div class="modal">
+  <h2>Import nodes</h2>
+  <div class="sub">Paste JSON array of nodes</div>
+  <textarea id="importText" rows="8" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:monospace;font-size:.8rem" placeholder='[{"name":"pve2","ip":"192.168.1.2","node":"pve","user":"root@pam","password":"..."}]'></textarea>
+  <div class="modal-actions">
+    <button class="btn btn-cancel" onclick="closeImport()">Cancel</button>
+    <button class="btn btn-save" onclick="doImport()">Import</button>
+  </div>
+</div></div>
 <div class="toast" id="toast"></div>
 <script>
 let addType='node',editName=null,settings={},charts={},graphVisible={cpu:true,ram:true,net:true,disk:false},refreshTimer=null;
@@ -533,25 +834,32 @@ function openSettings(){document.getElementById('drawerBg').classList.add('open'
 function closeSettings(){document.getElementById('drawerBg').classList.remove('open');document.getElementById('drawer').classList.remove('open')}
 async function loadSettings(){const r=await fetch('/api/settings');settings=await r.json();applyTheme(settings.theme||'dark');
 setToggle('tBuzzer',settings.buzzer_enabled);setToggle('tPassive',settings.passive_buzzer_enabled);setToggle('tQuiet',settings.quiet_mode);setToggle('tFlash',settings.flash_hostname!==false);setToggle('tCompact',settings.compact_cards);
+if(document.getElementById('sDensity'))sDensity.value=settings.density||'comfortable';
+if(document.getElementById('sAccent')){sAccent.value=settings.accent||'#3b82f6';applyAccent(sAccent.value)}
 sLog.value=settings.log_interval;sRefresh.value=settings.auto_refresh||5;sCpu.value=settings.cpu_alert;sDisk.value=settings.disk_alert;sRam.value=settings.ram_alert;
 if(document.getElementById('sFlashInt'))sFlashInt.value=settings.flash_interval||10;
 if(document.getElementById('sAlertRep'))sAlertRep.value=settings.alert_repeat_sec||25;
 setToggle('tNet',settings.show_net_on_card!==false);setToggle('tConfirm',settings.confirm_power!==false);
 graphVisible=settings.graph_visible||graphVisible;applyGraphVisibility();restartRefresh();
-if(settings.standalone||!settings.has_lcd)document.getElementById('lcdCard').style.display='none'}
+if(settings.standalone||!settings.has_lcd){const el=document.getElementById('lcdCard');if(el)el.style.display='none'}
+applyDensity(settings.density||'comfortable');}
 function setToggle(id,on){document.getElementById(id).classList.toggle('on',!!on)}
 function toggleSet(el,key){el.classList.toggle('on');settings[key]=el.classList.contains('on')}
-async function saveAllSettings(){settings.log_interval=parseInt(sLog.value)||10;settings.auto_refresh=parseInt(sRefresh.value)||5;settings.cpu_alert=parseInt(sCpu.value)||85;settings.disk_alert=parseInt(sDisk.value)||90;settings.ram_alert=parseInt(sRam.value)||90;
+async function saveAllSettings(){if(document.getElementById('sDensity')){settings.density=sDensity.value;applyDensity(settings.density)}
+if(document.getElementById('sAccent')){settings.accent=sAccent.value;applyAccent(settings.accent)}
+settings.log_interval=parseInt(sLog.value)||10;settings.auto_refresh=parseInt(sRefresh.value)||5;settings.cpu_alert=parseInt(sCpu.value)||85;settings.disk_alert=parseInt(sDisk.value)||90;settings.ram_alert=parseInt(sRam.value)||90;
 if(document.getElementById('sFlashInt'))settings.flash_interval=parseInt(sFlashInt.value)||10;
 if(document.getElementById('sAlertRep'))settings.alert_repeat_sec=parseInt(sAlertRep.value)||25;
 await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});toast('Settings saved');restartRefresh();load()}
 async function testBuzzer(){await fetch('/api/buzzer/test',{method:'POST'});toast('Buzzer test sent')}
+function backupConfig(){window.location='/api/config/backup'}
+
 function exportCsv(){window.location='/api/export/csv'}
 function openAddModal(edit=null){editName=edit;modalTitle.textContent=edit?'Edit node':'Add node / server';modalSaveBtn.textContent=edit?'Save':'Add';
 if(!edit){mName.value=mIp.value=mNode.value=mPass.value='';mUser.value='root@pam';setType('node')}addModal.classList.add('open')}
 function closeAddModal(){addModal.classList.remove('open');editName=null}
 function setType(t){addType=t;btnNode.classList.toggle('active',t==='node');btnServer.classList.toggle('active',t==='server');modalSub.textContent=t==='node'?'Another node on an existing host':'Independent Proxmox host'}
-async function testConn(){const r=await fetch('/api/test-connection',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:mName.value,ip:mIp.value,node:mNode.value||'pve',user:mUser.value,password:mPass.value})});const j=await r.json();toast(j.ok?'✓ Connected':'✗ '+(j.message||'Failed'))}
+async function testConn(){const r=await fetch('/api/test-connection',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:mName.value,ip:mIp.value,node:mNode.value||'pve',user:mUser.value,password:mPass.value})});const j=await r.json();toast(j.ok?('✓ Connected'+(j.latency_ms!=null?' · '+j.latency_ms+'ms':'')):'✗ '+(j.message||'Failed'))}
 async function saveNode(){const payload={name:mName.value.trim(),ip:mIp.value.trim(),node:mNode.value.trim()||mName.value.trim(),user:mUser.value.trim()||'root@pam',password:mPass.value,type:addType};
 if(!payload.name||!payload.ip){toast('Name and IP required');return}
 const r=editName?await fetch('/api/nodes/'+encodeURIComponent(editName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}):await fetch('/api/nodes/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -566,11 +874,18 @@ async function power(name,action){if(!confirm('Really '+action+' "'+name+'"?'))r
 function restartRefresh(){if(refreshTimer)clearInterval(refreshTimer);refreshTimer=setInterval(load,(settings.auto_refresh||5)*1000)}
 async function load(){
   const [nodes,logs,lcd]=await Promise.all([fetch('/api/current').then(r=>r.json()),fetch('/api/logs/server?limit=40').then(r=>r.json()),fetch('/api/lcd').then(r=>r.json()).catch(()=>null)]);
-  onlinePill.textContent=nodes.filter(n=>n.online==1).length+'/'+nodes.length+' online';
+  allNodesCache=nodes;onlinePill.textContent=nodes.filter(n=>n.online==1).length+'/'+nodes.length+' online';
+  if(!nodes.length){document.getElementById('nodesCol').innerHTML='<div class="empty-state"><h3>No nodes yet</h3><p>Add a Proxmox node to start monitoring.</p><button class="btn btn-primary" style="margin-top:12px" onclick="openAddModal()">+ Add node</button></div>';loadCharts();return}
   const col=document.getElementById('nodesCol');col.innerHTML='';
   nodes.forEach(n=>{const on=n.online==1;const ramPct=n.ram_total_gb?(n.ram_used_gb/n.ram_total_gb*100):0;
   const card=document.createElement('div');card.className='node-card'+(on?'':' offline');
-  card.innerHTML=`<div class="node-head"><div><div class="node-name">${n.node_name}</div><div class="node-meta">${n.ip||''} · ${n.node||''} · ${n.type||'server'}</div></div>
+  // offline toast
+  if(prevOnline[n.node_name]===1 && !on) toast('⚠ '+n.node_name+' went offline');
+  if(prevOnline[n.node_name]===0 && on) toast('✓ '+n.node_name+' back online');
+  prevOnline[n.node_name]=on?1:0;
+  const fav=n.favorite?'★':'☆';
+  const seen=relTime(n.timestamp);
+  card.innerHTML=`<div class="node-head"><div><div class="node-name"><span style="cursor:pointer;margin-right:4px" onclick="toggleFav('${n.node_name}',${!!n.favorite})" title="Favorite">${fav}</span><span style="cursor:pointer" onclick="openDetailByName('${n.node_name}')">${n.node_name}</span></div><div class="node-meta">${n.ip||''} · ${n.node||''} · ${n.type||'server'}${n.note?' · '+n.note:''}${(n.tags&&n.tags.length)?' · '+n.tags.join(', '):''}</div><div class="node-meta" style="margin-top:2px">Last seen: ${seen}</div></div>
   <span class="badge ${on?'badge-on':'badge-off'}">${on?'ONLINE':'OFFLINE'}</span></div>
   <div class="stat-row"><span><span class="dot" style="background:var(--accent)"></span>CPU</span><span>${(n.cpu_usage||0).toFixed(1)}%</span></div>
   <div class="bar"><div style="width:${n.cpu_usage||0}%;background:var(--accent)"></div></div>
@@ -579,17 +894,248 @@ async function load(){
   <div class="mini-stats"><div class="mini">DISK<strong>${(n.disk_pct||0).toFixed(1)}%</strong></div><div class="mini">VMS<strong>${n.active_vms||0}</strong></div><div class="mini">NET<strong>${(n.net_in_kbps||0).toFixed(0)} ↓</strong></div></div>
   <div class="actions"><button class="btn-reboot" ${on?'':'disabled'} onclick="power('${n.node_name}','reboot')">↻ Reboot</button>
   <button class="btn-shutdown" ${on?'':'disabled'} onclick="power('${n.node_name}','shutdown')">⏻ Shutdown</button>
+  <button class="btn-icon" onclick="openGuests('${n.node_name}')" title="Guests">▣</button>
+  <button class="btn-icon" onclick="editNote('${n.node_name}')" title="Note">📝</button>
   <button class="btn-icon" onclick="openEdit('${n.node_name}','${n.ip||''}','${n.node||''}','${n.type||'server'}')">✎</button>
   <button class="btn-icon" onclick="deleteNode('${n.node_name}')">🗑</button></div>`;col.appendChild(card)});
   if(lcd&&lcd.lines){lcdPreview.textContent=(lcd.lines[0]||'').padEnd(16)+'\n'+(lcd.lines[1]||'').padEnd(16);lcdMode.textContent=lcd.mode||'PAGES';
   if(lcd.alerting){alertStatus.textContent='⚠ Threshold exceeded';alertStatus.classList.add('active')}else{alertStatus.textContent='Quiet. Thresholds fire on the LCD and buzzer.';alertStatus.classList.remove('active')}}
   else if(nodes.length){const n=nodes[0];lcdPreview.textContent=`CPU: ${(n.cpu_usage||0).toFixed(1)}%    \nRAM: ${(n.ram_used_gb||0).toFixed(1)}/${(n.ram_total_gb||0).toFixed(1)}G`}
-  const times=logs.map(x=>(x.timestamp||'').split(' ')[1]||'');
-  charts.cpu.data.labels=times;charts.cpu.data.datasets[0].data=logs.map(x=>x.cpu_usage);charts.cpu.update('none');
-  charts.ram.data.labels=times;charts.ram.data.datasets[0].data=logs.map(x=>x.ram_used_gb);charts.ram.update('none');
-  charts.net.data.labels=times;charts.net.data.datasets[0].data=logs.map(x=>x.net_in_kbps||0);charts.net.data.datasets[1].data=logs.map(x=>x.net_out_kbps||0);charts.net.update('none');
-  charts.disk.data.labels=times;charts.disk.data.datasets[0].data=logs.map(x=>x.disk_pct||0);charts.disk.update('none');
+  loadCharts();
 }
+
+let graphRange = '1h';
+let prevOnline = {};
+
+function relTime(ts) {
+  if (!ts) return '—';
+  try {
+    const d = new Date(ts.includes('T') || ts.includes('Z') ? ts : ts.replace(' ', 'T') + 'Z');
+    const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec/60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec/3600) + 'h ago';
+    return Math.floor(sec/86400) + 'd ago';
+  } catch(e) { return ts; }
+}
+
+async function changeRange() {
+  graphRange = document.getElementById('graphRange').value;
+  await loadCharts();
+}
+
+async function loadCharts() {
+  const logs = await fetch('/api/logs/range?range=' + graphRange).then(r => r.json());
+  const times = logs.map(x => (x.timestamp||'').split(' ')[1] || '');
+  charts.cpu.data.labels = times; charts.cpu.data.datasets[0].data = logs.map(x => x.cpu_usage); charts.cpu.update('none');
+  charts.ram.data.labels = times; charts.ram.data.datasets[0].data = logs.map(x => x.ram_used_gb); charts.ram.update('none');
+  charts.net.data.labels = times;
+  charts.net.data.datasets[0].data = logs.map(x => x.net_in_kbps || 0);
+  charts.net.data.datasets[1].data = logs.map(x => x.net_out_kbps || 0);
+  charts.net.update('none');
+  charts.disk.data.labels = times; charts.disk.data.datasets[0].data = logs.map(x => x.disk_pct || 0); charts.disk.update('none');
+}
+
+async function loadAlerts() {
+  const list = document.getElementById('alertList');
+  if (!list) return;
+  const alerts = await fetch('/api/alerts?limit=20').then(r => r.json());
+  if (!alerts.length) { list.innerHTML = '<div style="opacity:.6">No recent alerts</div>'; return; }
+  list.innerHTML = alerts.slice(0, 12).map(a =>
+    `<div style="padding:3px 0;border-bottom:1px solid var(--border);${a.acknowledged?'opacity:.5':''}">
+      <b>${a.node_name||'?'}</b> ${a.message||a.alert_type}
+      ${a.acknowledged?'':' <a href="#" onclick="ackOne('+a.id+');return false" style="color:var(--accent)">ack</a>'}
+    </div>`
+  ).join('');
+}
+
+async function loadActivity() {
+  const list = document.getElementById('activityList');
+  if (!list) return;
+  const acts = await fetch('/api/activity?limit=15').then(r => r.json());
+  if (!acts.length) { list.innerHTML = '<div style="opacity:.6">No activity yet</div>'; return; }
+  list.innerHTML = acts.map(a =>
+    `<div style="padding:2px 0">${(a.timestamp||'').split(' ')[1]||''} · <b>${a.action}</b> ${a.detail||''}</div>`
+  ).join('');
+}
+
+async function ackAll() {
+  await fetch('/api/alerts/ack', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+  toast('All alerts acknowledged');
+  loadAlerts();
+}
+
+async function ackOne(id) {
+  await fetch('/api/alerts/ack', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id})});
+  loadAlerts();
+}
+
+async function toggleFav(name, cur) {
+  await fetch('/api/nodes/' + encodeURIComponent(name) + '/meta', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({favorite: !cur})
+  });
+  load();
+}
+
+function applyDensity(d) {
+  document.body.classList.remove('density-compact','density-comfortable','density-dense');
+  document.body.classList.add('density-' + (d || 'comfortable'));
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  const k = e.key.toLowerCase();
+  if (k === 'r') { e.preventDefault(); load(); toast('Refreshed'); }
+  if (k === 's') { e.preventDefault(); openSettings(); }
+  if (k === 'a') { e.preventDefault(); openAddModal(); }
+  if (k === 'escape') { closeSettings(); closeAddModal(); closeGraphEdit(); }
+});
+
+
+async function openGuests(name) {
+  guestTitle.textContent = name + ' — Guests';
+  guestList.innerHTML = 'Loading…';
+  guestModal.classList.add('open');
+  const r = await fetch('/api/nodes/' + encodeURIComponent(name) + '/guests');
+  const j = await r.json();
+  if (!j.ok) { guestList.innerHTML = 'Failed to load'; return; }
+  if (!j.guests.length) { guestList.innerHTML = '<div style="opacity:.6;padding:12px">No VMs or containers</div>'; return; }
+  guestList.innerHTML = j.guests.map(g => {
+    const run = g.status === 'running';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--border)">
+      <span style="flex:1"><b>${g.name}</b> <span style="opacity:.6">(${g.type} ${g.vmid})</span><br>
+      <span style="font-size:.75rem;color:${run?'var(--green)':'var(--muted)'}">${g.status}</span>
+      ${run?` · CPU ${g.cpu}% · RAM ${g.mem}/${g.maxmem}G`:''}</span>
+      <button class="btn btn-ghost" style="width:auto;padding:4px 8px;font-size:.72rem" onclick="guestAct('${name}',${g.vmid},'${g.type}','${run?'shutdown':'start'}')">${run?'Stop':'Start'}</button>
+      ${run?`<button class="btn btn-ghost" style="width:auto;padding:4px 8px;font-size:.72rem" onclick="guestAct('${name}',${g.vmid},'${g.type}','reboot')">Reboot</button>`:''}
+    </div>`;
+  }).join('');
+}
+function closeGuests(){guestModal.classList.remove('open')}
+async function guestAct(node, vmid, kind, action) {
+  if (action !== 'start' && !confirm(action + ' ' + kind + '/' + vmid + '?')) return;
+  const r = await fetch(`/api/nodes/${encodeURIComponent(node)}/guests/${vmid}/${action}?kind=${kind}`, {method:'POST'});
+  const j = await r.json();
+  toast(j.ok ? action + ' sent' : 'Failed');
+  openGuests(node);
+}
+
+let bulkNodes = [];
+async function openBulk() {
+  const nodes = await fetch('/api/current').then(r=>r.json());
+  bulkList.innerHTML = nodes.map(n =>
+    `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
+      <input type="checkbox" value="${n.node_name}" ${n.online==1?'':'disabled'}> ${n.node_name}
+      <span style="margin-left:auto;font-size:.72rem;color:var(--muted)">${n.online==1?'online':'offline'}</span>
+    </label>`
+  ).join('');
+  bulkModal.classList.add('open');
+}
+function closeBulk(){bulkModal.classList.remove('open')}
+async function bulkPower(action) {
+  const boxes = [...bulkList.querySelectorAll('input:checked')].map(c => c.value);
+  if (!boxes.length) { toast('Select at least one node'); return; }
+  if (!confirm(action + ' ' + boxes.length + ' node(s)?')) return;
+  const r = await fetch('/api/power/bulk', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action, nodes: boxes})});
+  const j = await r.json();
+  const ok = Object.values(j.results||{}).filter(Boolean).length;
+  toast(ok + '/' + boxes.length + ' ' + action + ' sent');
+  closeBulk();
+}
+
+async function editNote(name) {
+  const note = prompt('Note for ' + name + ' (leave empty to clear)', '');
+  if (note === null) return;
+  await fetch('/api/nodes/' + encodeURIComponent(name) + '/meta', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({note})
+  });
+  load();
+}
+
+
+let detailName = null;
+let allNodesCache = [];
+
+function filterNodes() {
+  const q = (document.getElementById('nodeSearch')?.value || '').toLowerCase().trim();
+  document.querySelectorAll('#nodesCol .node-card').forEach(card => {
+    const text = card.textContent.toLowerCase();
+    card.style.display = !q || text.includes(q) ? '' : 'none';
+  });
+}
+
+function openDetailByName(name){const n=allNodesCache.find(x=>x.node_name===name);if(n)openDetail(n)}
+function openDetail(n) {
+  detailName = n.node_name;
+  detailTitle.textContent = n.node_name;
+  detailSub.textContent = (n.ip||'') + ' · ' + (n.online==1?'online':'offline') + ' · last ' + relTime(n.timestamp);
+  dNote.value = n.note || '';
+  dTags.value = (n.tags||[]).join(', ');
+  dCpu.value = n.cpu_alert != null ? n.cpu_alert : '';
+  dRam.value = n.ram_alert != null ? n.ram_alert : '';
+  dDisk.value = n.disk_alert != null ? n.disk_alert : '';
+  detailModal.classList.add('open');
+}
+function closeDetail(){detailModal.classList.remove('open');detailName=null}
+async function saveDetail() {
+  if (!detailName) return;
+  const tags = dTags.value.split(',').map(s=>s.trim()).filter(Boolean);
+  const payload = {
+    note: dNote.value,
+    tags,
+    cpu_alert: dCpu.value === '' ? null : parseFloat(dCpu.value),
+    ram_alert: dRam.value === '' ? null : parseFloat(dRam.value),
+    disk_alert: dDisk.value === '' ? null : parseFloat(dDisk.value),
+  };
+  await fetch('/api/nodes/' + encodeURIComponent(detailName) + '/meta', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+  });
+  toast('Saved');
+  closeDetail();
+  load();
+}
+
+function openImport(){importText.value='';importModal.classList.add('open')}
+function closeImport(){importModal.classList.remove('open')}
+async function doImport() {
+  let nodes;
+  try { nodes = JSON.parse(importText.value); }
+  catch(e) { toast('Invalid JSON'); return; }
+  if (!Array.isArray(nodes)) { toast('Need a JSON array'); return; }
+  const r = await fetch('/api/nodes/import', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({nodes})
+  });
+  const j = await r.json();
+  toast(j.ok ? ('Imported ' + j.added + ' node(s)') : (j.error || 'Failed'));
+  if (j.ok) { closeImport(); load(); }
+}
+
+async function restoreConfig() {
+  const raw = prompt('Paste config JSON (from backup). Passwords are not restored.');
+  if (!raw) return;
+  let data;
+  try { data = JSON.parse(raw); } catch(e) { toast('Invalid JSON'); return; }
+  const r = await fetch('/api/config/restore', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)
+  });
+  const j = await r.json();
+  toast(j.ok ? 'Settings restored' : 'Failed');
+  if (j.ok) loadSettings().then(load);
+}
+
+function exportJson() {
+  const r = document.getElementById('graphRange')?.value || '1h';
+  window.location = '/api/export/json?range=' + r;
+}
+
+function applyAccent(c) {
+  if (!c) return;
+  document.documentElement.style.setProperty('--accent', c);
+}
+
 function openEdit(name,ip,node,type){openAddModal(name);mName.value=name;mIp.value=ip;mNode.value=node;setType(type==='node'?'node':'server')}
-loadSettings().then(()=>load());
+loadSettings().then(()=>{load();loadAlerts();loadActivity();});
+setInterval(()=>{loadAlerts();loadActivity();}, 15000);
 </script></body></html>"""

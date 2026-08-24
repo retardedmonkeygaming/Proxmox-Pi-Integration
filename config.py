@@ -7,6 +7,9 @@ CONFIG_FILE = "config.json"
 DEFAULT_NODE = {
     "name": "Precision", "ip": "", "node": "pve",
     "user": "root@pam", "password": "", "type": "server",
+    "note": "", "favorite": False,
+    "cpu_alert": None, "ram_alert": None, "disk_alert": None,
+    "tags": [],
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -18,6 +21,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "passive_buzzer_enabled": True,
     "quiet_mode": False,
     "compact_cards": False,
+    "density": "comfortable",
     "flash_hostname": True,
     "flash_interval": 10,
     "flash_duration": 2.2,
@@ -30,8 +34,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "disk_alert": 90,
     "ram_alert": 90,
     "theme": "dark",
+    "accent": "#3b82f6",
     "graph_order": ["cpu", "ram", "net"],
     "graph_visible": {"cpu": True, "ram": True, "net": True, "disk": False},
+    "graph_range_min": 60,
     "auto_refresh": 5,
     "show_net_on_card": True,
     "confirm_power": True,
@@ -69,6 +75,14 @@ def load_config() -> Dict[str, Any]:
     for k, v in DEFAULT_CONFIG.items():
         if k not in cfg:
             cfg[k] = v
+    # ensure node extra fields
+    for n in cfg.get("nodes", []):
+        n.setdefault("note", "")
+        n.setdefault("favorite", False)
+        n.setdefault("cpu_alert", None)
+        n.setdefault("ram_alert", None)
+        n.setdefault("disk_alert", None)
+        n.setdefault("tags", [])
     cfg.pop("has_dht", None)
     cfg.pop("gpio_dht", None)
     cfg.pop("dht_interval", None)

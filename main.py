@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 import uvicorn
 import config
 import database
+from database import log_alert, log_activity, ack_alert
 from hardware import HardwareManager
 from monitor import ProxmoxManager
 from logging_setup import setup_logging
@@ -139,6 +140,20 @@ def main():
                 alerting = False
                 hw.beep(0.05, 1)
                 last_activity = now
+                try:
+                    ack_alert(node_name=metrics.get("name"))
+                    log_activity("alert_ack", str(metrics.get("name","")), "hardware")
+                except Exception:
+                    pass
+                try:
+                    ack_alert(node_name=metrics.get("name"))
+                    log_activity("alert_ack", metrics.get("name", ""), "hardware")
+                except Exception:
+                    pass
+                try:
+                    database.ack_alert(node_name=metrics.get("name"))
+                except Exception:
+                    pass
             elif g == "DOUBLE" and not in_settings:
                 in_settings = True
                 settings_idx = 0
@@ -184,6 +199,8 @@ def main():
                                 ok = client.power("shutdown")
                                 hw.alert_tone()
                                 log.info("Shutdown sent to %s: %s", name, ok)
+                                try: log_activity("shutdown", str(name), "hardware")
+                                except: pass
                             confirm_shutdown = False
                     config.save_config(cfg)
                     hw.beep(0.07)
@@ -203,9 +220,10 @@ def main():
             alerting = False
             ram_pct = 0.0
             if metrics.get("online") and not cfg.get("quiet_mode"):
-                cpu_a = cfg.get("cpu_alert", 85)
-                ram_a = cfg.get("ram_alert", 90)
-                disk_a = cfg.get("disk_alert", 90)
+                ncfg = next((x for x in cfg.get("nodes", []) if x.get("name") == metrics.get("name")), {})
+                cpu_a = ncfg["cpu_alert"] if ncfg.get("cpu_alert") is not None else cfg.get("cpu_alert", 85)
+                ram_a = ncfg["ram_alert"] if ncfg.get("ram_alert") is not None else cfg.get("ram_alert", 90)
+                disk_a = ncfg["disk_alert"] if ncfg.get("disk_alert") is not None else cfg.get("disk_alert", 90)
                 ram_pct = (metrics["ram_used"] / metrics["ram_total"] * 100) if metrics.get("ram_total") else 0
                 if metrics["cpu"] >= cpu_a or ram_pct >= ram_a or metrics["disk_pct"] >= disk_a:
                     alerting = True
@@ -213,6 +231,13 @@ def main():
                     if not hw.alert_silenced and now - alert_cooldown > repeat:
                         hw.alert_tone()
                         alert_cooldown = now
+                        try:
+                            atype = "cpu" if metrics["cpu"] >= cpu_a else ("ram" if ram_pct >= ram_a else "disk")
+                            val = metrics["cpu"] if atype == "cpu" else (ram_pct if atype == "ram" else metrics["disk_pct"])
+                            thr = cpu_a if atype == "cpu" else (ram_a if atype == "ram" else disk_a)
+                            log_alert(metrics.get("name", "?"), atype, f"{atype.upper()} {val:.0f}% >= {thr}%", val, thr)
+                        except Exception:
+                            pass
                 else:
                     hw.alert_silenced = False
 
