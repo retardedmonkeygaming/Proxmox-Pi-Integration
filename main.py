@@ -2,7 +2,7 @@ import time
 import threading
 from typing import Any, Dict
 import uvicorn
-from .app import app as fastapi_app
+from app import app as fastapi_app
 
 from . import config, database
 from .hardware import HardwareManager
