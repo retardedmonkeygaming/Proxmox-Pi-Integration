@@ -29,6 +29,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "default_node_idx": 0,
     "log_level": "INFO",
     "setup_done": False,
+    "pins_done": False,
+    "standalone": False,
     "cpu_alert": 85,
     "disk_alert": 90,
     "ram_alert": 90,
@@ -36,11 +38,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "graph_order": ["cpu", "ram", "net"],
     "graph_visible": {"cpu": True, "ram": True, "net": True, "disk": False},
     "auto_refresh": 5,
+    # components installed
+    "has_lcd": True,
+    "has_touch": True,
+    "has_active_buzzer": True,
+    "has_passive_buzzer": True,
+    "has_dht": True,
+    # GPIO (BCM)
     "gpio_touch": 27,
     "gpio_active_buzzer": 6,
     "gpio_passive_buzzer": 16,
     "gpio_dht": 4,
-    "lcd_mode": "non_i2c",
+    "lcd_mode": "parallel",   # "parallel" | "i2c"
     "lcd_rs": 22,
     "lcd_en": 17,
     "lcd_d4": 25,
@@ -95,6 +104,8 @@ def run_terminal_wizard() -> Dict[str, Any]:
             break
     cfg["nodes"] = nodes
     cfg["setup_done"] = True
+    cfg["pins_done"] = True
+    cfg["standalone"] = True
     save_config(cfg)
-    print("\n[✓] Saved.\n")
+    print("\n[✓] Saved (standalone).\n")
     return cfg
