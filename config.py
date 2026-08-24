@@ -10,7 +10,7 @@ DEFAULT_NODE = {
     "node": "pve",
     "user": "root@pam",
     "password": "",
-    "type": "server",  # "node" or "server"
+    "type": "server",
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -19,10 +19,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "dht_interval": 30,
     "hold_time": 0.5,
     "multi_tap_window": 0.45,
-    "buzzer_enabled": True,          # active buzzer GPIO 6 (clicks)
-    "passive_buzzer_enabled": True,  # passive buzzer pin 20 (alert tones)
-    "quiet_mode": False,             # mute LCD alert tones
+    "buzzer_enabled": True,
+    "passive_buzzer_enabled": True,
+    "quiet_mode": False,
     "compact_cards": False,
+    "flash_hostname": True,
     "flash_interval": 10,
     "flash_duration": 2.2,
     "default_node_idx": 0,
@@ -31,13 +32,22 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "cpu_alert": 85,
     "disk_alert": 90,
     "ram_alert": 90,
-    "hostname_flash": 10,
-    "lcd_contrast": 70,
     "theme": "dark",
     "graph_order": ["cpu", "ram", "net"],
     "graph_visible": {"cpu": True, "ram": True, "net": True, "disk": False},
-    "show_humidity": True,
     "auto_refresh": 5,
+    "gpio_touch": 27,
+    "gpio_active_buzzer": 6,
+    "gpio_passive_buzzer": 16,
+    "gpio_dht": 4,
+    "lcd_mode": "non_i2c",
+    "lcd_rs": 22,
+    "lcd_en": 17,
+    "lcd_d4": 25,
+    "lcd_d5": 24,
+    "lcd_d6": 23,
+    "lcd_d7": 18,
+    "lcd_i2c_addr": "0x27",
 }
 
 def load_config() -> Dict[str, Any]:
@@ -45,7 +55,6 @@ def load_config() -> Dict[str, Any]:
         return DEFAULT_CONFIG.copy()
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         cfg = json.load(f)
-    # migrate old single-node format
     if "pve_ip" in cfg and "nodes" not in cfg:
         cfg["nodes"] = [{
             "name": cfg.get("pve_node", "pve"),

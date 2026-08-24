@@ -1,5 +1,6 @@
 import time
 import threading
+import os
 from typing import Any, Dict, List
 
 import uvicorn
@@ -9,6 +10,8 @@ from hardware import HardwareManager
 from monitor import ProxmoxManager
 from logging_setup import setup_logging
 from app import app as fastapi_app, lcd_state
+
+BUZZER_TEST_FLAG = "/tmp/pve_buzzer_test"
 
 def fmt_rate(kbps: float) -> str:
     if kbps >= 1024:
@@ -47,12 +50,7 @@ def main():
     log.info("=== PVE Node Monitor starting ===")
 
     database.init_db()
-    hw = HardwareManager(
-        hold_time=cfg["hold_time"],
-        multi_tap_window=cfg["multi_tap_window"],
-        buzzer_enabled=cfg.get("buzzer_enabled", True),
-        passive_buzzer_enabled=cfg.get("passive_buzzer_enabled", True),
-    )
+    hw = HardwareManager(cfg)
     pve = ProxmoxManager(cfg["nodes"])
 
     all_metrics: List[Dict[str, Any]] = []
@@ -61,12 +59,12 @@ def main():
     stop = threading.Event()
     alert_cooldown = 0.0
     last_cfg_check = 0.0
+    alerting = False
 
     def poller():
         nonlocal all_metrics
         while not stop.is_set():
             cfg_now = config.load_config()
-            # hot-reload nodes if count changed
             if len(cfg_now.get("nodes", [])) != len(pve.clients):
                 pve.reload(cfg_now["nodes"])
             results = pve.poll_all()
@@ -115,17 +113,23 @@ def main():
     try:
         while True:
             now = time.time()
-            # reload live settings every 3s
             if now - last_cfg_check > 3:
                 cfg = config.load_config()
                 hw.buzzer_enabled = cfg.get("buzzer_enabled", True)
                 hw.passive_buzzer_enabled = cfg.get("passive_buzzer_enabled", True)
                 last_cfg_check = now
 
+            # buzzer test from web
+            if os.path.exists(BUZZER_TEST_FLAG):
+                try:
+                    os.remove(BUZZER_TEST_FLAG)
+                    hw.test_beep()
+                except Exception:
+                    pass
+
             g = hw.read_gesture()
             metrics = all_metrics[current_idx] if all_metrics else {"online": False, "name": "?"}
 
-            # web-driven LCD actions
             if lcd_state.get("force_flash"):
                 flash_active = True
                 last_flash = now
@@ -142,8 +146,13 @@ def main():
                 lcd_state["in_settings"] = False
                 lcd_state["mode"] = "PAGES"
 
-            # gesture handling
-            if g == "DOUBLE" and not in_settings:
+            # DOUBLE tap while alerting → silence
+            if g == "DOUBLE" and alerting:
+                hw.alert_silenced = True
+                alerting = False
+                hw.beep(0.05, 1)
+                last_activity = now
+            elif g == "DOUBLE" and not in_settings:
                 in_settings = True
                 settings_idx = 0
                 last_activity = now
@@ -156,7 +165,7 @@ def main():
             elif in_settings:
                 last_activity = now
                 if g == "SINGLE":
-                    settings_idx = (settings_idx + 1) % 6
+                    settings_idx = (settings_idx + 1) % 7
                     lcd_state["settings_idx"] = settings_idx
                 elif g == "HOLD":
                     if settings_idx == 0:
@@ -175,18 +184,18 @@ def main():
                         current_idx = (current_idx + 1) % max(1, len(all_metrics) or 1)
                         cfg["default_node_idx"] = current_idx
                     elif settings_idx == 5:
-                        # SHUTDOWN CONFIRM
+                        cfg["flash_hostname"] = not cfg.get("flash_hostname", True)
+                    elif settings_idx == 6:
                         if not confirm_shutdown:
                             confirm_shutdown = True
                             confirm_timer = now
                             hw.beep(0.08, 2)
                         else:
-                            # confirmed – send shutdown
                             name = metrics.get("name")
                             client = pve.get_client(name) if name else None
                             if client:
                                 ok = client.power("shutdown")
-                                hw.alert_tone(0.3, 3)
+                                hw.alert_tone()
                                 log.info("Shutdown sent to %s: %s", name, ok)
                             confirm_shutdown = False
                     config.save_config(cfg)
@@ -200,12 +209,12 @@ def main():
                 config.save_config(cfg)
                 hw.beep(0.05, 2)
 
-            # clear confirm if timed out
             if confirm_shutdown and now - confirm_timer > 5:
                 confirm_shutdown = False
 
             # ---- ALERTS ----
             alerting = False
+            ram_pct = 0.0
             if metrics.get("online") and not cfg.get("quiet_mode"):
                 cpu_a = cfg.get("cpu_alert", 85)
                 ram_a = cfg.get("ram_alert", 90)
@@ -213,13 +222,15 @@ def main():
                 ram_pct = (metrics["ram_used"] / metrics["ram_total"] * 100) if metrics.get("ram_total") else 0
                 if metrics["cpu"] >= cpu_a or ram_pct >= ram_a or metrics["disk_pct"] >= disk_a:
                     alerting = True
-                    if now - alert_cooldown > 30:
-                        hw.alert_tone(0.2, 2)
+                    if not hw.alert_silenced and now - alert_cooldown > 25:
+                        hw.alert_tone()
                         alert_cooldown = now
+                else:
+                    hw.alert_silenced = False  # clear silence when back to normal
 
             # ---- DISPLAY ----
             if in_settings:
-                if confirm_shutdown and settings_idx == 5:
+                if confirm_shutdown and settings_idx == 6:
                     hw.force_display("SHUTDOWN?", "HOLD to confirm")
                 else:
                     labels = [
@@ -228,26 +239,28 @@ def main():
                         ("Act Buzzer", f"> {'ON' if cfg['buzzer_enabled'] else 'OFF'}"),
                         ("Pas Buzzer", f"> {'ON' if cfg.get('passive_buzzer_enabled') else 'OFF'}"),
                         ("Active Node", f"> {(metrics.get('name') or '?')[:10]}"),
+                        ("Name Flash", f"> {'ON' if cfg.get('flash_hostname', True) else 'OFF'}"),
                         ("Shutdown", "> HOLD=send"),
                     ]
                     title, val = labels[settings_idx]
                     hw.display(f"SET {title[:12]}", f"{val:<16}")
                 lcd_state["mode"] = "SETTINGS"
             else:
+                do_flash = cfg.get("flash_hostname", True)
                 flash_int = cfg.get("hostname_flash", cfg.get("flash_interval", 10))
-                if now - last_flash >= flash_int:
+                if do_flash and now - last_flash >= flash_int:
                     flash_active = True
                     last_flash = now
 
-                if flash_active and (now - last_flash) <= cfg.get("flash_duration", 2.2):
+                if do_flash and flash_active and (now - last_flash) <= cfg.get("flash_duration", 2.2):
                     name = (metrics.get("name") or "?")[:14]
                     hw.force_display("     NODE:     ", f"[{name.center(14)}]")
                     lcd_state["mode"] = "FLASH"
                 else:
                     flash_active = False
                     lcd_state["mode"] = "PAGES"
-                    if alerting:
-                        hw.force_display("!! ALERT !!", f"CPU{metrics['cpu']:.0f} R{ram_pct:.0f} D{metrics['disk_pct']:.0f}")
+                    if alerting and not hw.alert_silenced:
+                        hw.force_display("    ALERT     ", "              ")
                     elif not metrics.get("online"):
                         hw.display(" System Offline", f"{(metrics.get('name') or '')[:16]:^16}")
                     else:
@@ -261,20 +274,16 @@ def main():
                             hw.display(f"Up:  {up}     ", f"Dn:  {dn}     ")
                         elif page == 3:
                             uptime = fmt_uptime(metrics.get("uptime", 0))
-                            hum = f"{humidity:.0f}%" if humidity is not None else "--%"
-                            hw.display(f"Up:  {uptime:<6}    ", f"Hum: {hum:<6}    ")
+                            hw.display(f"Uptime: {uptime:<7}", f"{(metrics.get('name') or '')[:16]:^16}")
                         else:
-                            # page 4 – IP + type
                             ip = (metrics.get("ip") or "?")[:16]
                             ntype = metrics.get("type", "server")[:6]
                             hw.display(f"{ip:<16}", f"Type: {ntype:<10}")
 
-            # push lines to web preview
             lcd_state["last_lines"] = hw.get_display_text()
-            lcd_state["humidity"] = humidity
-            lcd_state["alerting"] = alerting
             lcd_state["page"] = page
             lcd_state["in_settings"] = in_settings
+            lcd_state["alerting"] = alerting and not hw.alert_silenced
 
             time.sleep(0.035)
     except KeyboardInterrupt:
