@@ -33,9 +33,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "ram_alert": 90,
     "hostname_flash": 10,
     "lcd_contrast": 70,
-    "theme": "system",               # light / dark / system
+    "theme": "dark",
     "graph_order": ["cpu", "ram", "net"],
     "graph_visible": {"cpu": True, "ram": True, "net": True, "disk": False},
+    "show_humidity": True,
+    "auto_refresh": 5,
 }
 
 def load_config() -> Dict[str, Any]:

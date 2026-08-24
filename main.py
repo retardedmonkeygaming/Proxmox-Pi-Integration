@@ -103,7 +103,7 @@ def main():
     log.info("Web UI → http://0.0.0.0:8000")
 
     page = 0
-    TOTAL = 4
+    TOTAL = 5
     in_settings = False
     settings_idx = 0
     last_flash = time.time()
@@ -259,13 +259,20 @@ def main():
                             up = fmt_rate(metrics["net_out"])
                             dn = fmt_rate(metrics["net_in"])
                             hw.display(f"Up:  {up}     ", f"Dn:  {dn}     ")
-                        else:
+                        elif page == 3:
                             uptime = fmt_uptime(metrics.get("uptime", 0))
                             hum = f"{humidity:.0f}%" if humidity is not None else "--%"
                             hw.display(f"Up:  {uptime:<6}    ", f"Hum: {hum:<6}    ")
+                        else:
+                            # page 4 – IP + type
+                            ip = (metrics.get("ip") or "?")[:16]
+                            ntype = metrics.get("type", "server")[:6]
+                            hw.display(f"{ip:<16}", f"Type: {ntype:<10}")
 
             # push lines to web preview
             lcd_state["last_lines"] = hw.get_display_text()
+            lcd_state["humidity"] = humidity
+            lcd_state["alerting"] = alerting
             lcd_state["page"] = page
             lcd_state["in_settings"] = in_settings
 
