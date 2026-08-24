@@ -436,9 +436,9 @@ def api_export_json(range: str = "1h"):
 def setup_page():
     cfg = config.load_config()
     if cfg.get("setup_done") and cfg.get("pins_done") and cfg.get("nodes"):
-        return RedirectResponse("/")
+        return RedirectResponse("/", status_code=303)
     if cfg.get("setup_done") and not cfg.get("pins_done"):
-        return RedirectResponse("/setup/pins")
+        return RedirectResponse("/setup/pins", status_code=303)
     return SETUP_HTML
 
 @app.post("/setup")
@@ -503,7 +503,10 @@ async def setup_pins_submit(request: Request):
 def dashboard():
     cfg = config.load_config()
     if not cfg.get("setup_done") or not cfg.get("nodes"):
-        return RedirectResponse("/setup")
+        return RedirectResponse("/setup", status_code=303)
+    if cfg.get("setup_done") and not cfg.get("pins_done"):
+        return RedirectResponse("/setup/pins", status_code=303)
+    return DASHBOARD_HTML("/setup")
     if not cfg.get("pins_done"):
         return RedirectResponse("/setup/pins")
     return DASHBOARD_HTML
@@ -564,7 +567,17 @@ body.guest-mode .actions button:not(.btn-icon),
 body.guest-mode .btn-reboot,
 body.guest-mode .btn-shutdown { display: none !important; }
 body.guest-mode #bottomNav { display: none !important; }
-</style></head><body>
+
+body.setup-page #alertHistoryModal,
+body.setup-page #qrModal,
+body.setup-page #pinOverlay,
+body.setup-page #bottomNav,
+body.setup-page #quickBar,
+body.setup-page .footer-diag {
+  display: none !important;
+}
+</style>
+</head><body class="setup-page">
 <div class="card">
 <h1>PVE Node Monitor</h1>
 <p class="sub">Step 1 · Add your Proxmox nodes</p>
@@ -705,7 +718,17 @@ body.guest-mode .actions button:not(.btn-icon),
 body.guest-mode .btn-reboot,
 body.guest-mode .btn-shutdown { display: none !important; }
 body.guest-mode #bottomNav { display: none !important; }
-</style></head><body>
+
+body.setup-page #alertHistoryModal,
+body.setup-page #qrModal,
+body.setup-page #pinOverlay,
+body.setup-page #bottomNav,
+body.setup-page #quickBar,
+body.setup-page .footer-diag {
+  display: none !important;
+}
+</style>
+</head><body>
 <div class="card">
 <h1>Pin Layout</h1>
 <p class="sub">Step 2 · Components & GPIO pins</p>
@@ -924,7 +947,17 @@ body.guest-mode .actions button:not(.btn-icon),
 body.guest-mode .btn-reboot,
 body.guest-mode .btn-shutdown { display: none !important; }
 body.guest-mode #bottomNav { display: none !important; }
-</style></head>
+
+body.setup-page #alertHistoryModal,
+body.setup-page #qrModal,
+body.setup-page #pinOverlay,
+body.setup-page #bottomNav,
+body.setup-page #quickBar,
+body.setup-page .footer-diag {
+  display: none !important;
+}
+</style>
+</head>
 <body>
 <header>
   <div style="width:160px"></div>
