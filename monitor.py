@@ -9,12 +9,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 log = logging.getLogger("pve_node_monitor")
 
 class NodeClient:
-    def __init__(self, name: str, ip: str, node: str, user: str, password: str):
+    def __init__(self, name: str, ip: str, node: str, user: str, password: str, ntype: str = "server"):
         self.name = name
         self.ip = ip
         self.node = node
         self.user = user
         self.password = password
+        self.ntype = ntype
         self.base = f"https://{ip}:8006/api2/json"
         self.ticket = self.csrf = None
         self.session = requests.Session()
@@ -98,6 +99,9 @@ class NodeClient:
             self.last_ok = time.time()
             return {
                 "name": self.name,
+                "ip": self.ip,
+                "node": self.node,
+                "type": self.ntype,
                 "cpu": cpu, "ram_used": ram_u, "ram_total": ram_t,
                 "disk_pct": disk, "active_vms": active,
                 "net_in": net_in, "net_out": net_out,
@@ -122,11 +126,27 @@ class NodeClient:
             log.error("Power %s: %s", action, e)
             return False
 
+    def test_connection(self) -> Dict[str, Any]:
+        ok = self.authenticate()
+        return {"ok": ok, "message": "Connected" if ok else "Auth failed"}
+
 
 class ProxmoxManager:
     def __init__(self, nodes_cfg: List[Dict]):
         self.clients = [
-            NodeClient(n["name"], n["ip"], n["node"], n["user"], n["password"])
+            NodeClient(
+                n["name"], n["ip"], n["node"], n["user"], n["password"],
+                n.get("type", "server")
+            )
+            for n in nodes_cfg
+        ]
+
+    def reload(self, nodes_cfg: List[Dict]):
+        self.clients = [
+            NodeClient(
+                n["name"], n["ip"], n["node"], n["user"], n["password"],
+                n.get("type", "server")
+            )
             for n in nodes_cfg
         ]
 
@@ -138,7 +158,8 @@ class ProxmoxManager:
                 results.append(s)
             else:
                 results.append({
-                    "name": c.name, "online": False,
+                    "name": c.name, "ip": c.ip, "node": c.node, "type": c.ntype,
+                    "online": False,
                     "cpu": 0, "ram_used": 0, "ram_total": 0,
                     "disk_pct": 0, "active_vms": 0,
                     "net_in": 0, "net_out": 0, "uptime": 0,
