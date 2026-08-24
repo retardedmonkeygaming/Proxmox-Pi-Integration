@@ -576,8 +576,24 @@ body.setup-page #quickBar,
 body.setup-page .footer-diag {
   display: none !important;
 }
+
+body.setup-page #alertHistoryModal,
+body.setup-page #qrModal,
+body.setup-page #pinOverlay,
+body.setup-page #bottomNav,
+body.setup-page #quickBar,
+body.setup-page .footer-diag,
+body.setup-page a[onclick*="copyDiagnostics"],
+body.setup-page a[onclick*="showQr"] {
+  display: none !important;
+}
+/* also hide the floating version text */
+body.setup-page > div:last-of-type {
+  display: none !important;
+}
+
 </style>
-</head><body class="setup-page">
+</head><body class=\"setup-page\">
 <div class="card">
 <h1>PVE Node Monitor</h1>
 <p class="sub">Step 1 · Add your Proxmox nodes</p>
@@ -727,8 +743,24 @@ body.setup-page #quickBar,
 body.setup-page .footer-diag {
   display: none !important;
 }
+
+body.setup-page #alertHistoryModal,
+body.setup-page #qrModal,
+body.setup-page #pinOverlay,
+body.setup-page #bottomNav,
+body.setup-page #quickBar,
+body.setup-page .footer-diag,
+body.setup-page a[onclick*="copyDiagnostics"],
+body.setup-page a[onclick*="showQr"] {
+  display: none !important;
+}
+/* also hide the floating version text */
+body.setup-page > div:last-of-type {
+  display: none !important;
+}
+
 </style>
-</head><body>
+</head><body class=\"setup-page\">
 <div class="card">
 <h1>Pin Layout</h1>
 <p class="sub">Step 2 · Components & GPIO pins</p>
@@ -956,6 +988,22 @@ body.setup-page #quickBar,
 body.setup-page .footer-diag {
   display: none !important;
 }
+
+body.setup-page #alertHistoryModal,
+body.setup-page #qrModal,
+body.setup-page #pinOverlay,
+body.setup-page #bottomNav,
+body.setup-page #quickBar,
+body.setup-page .footer-diag,
+body.setup-page a[onclick*="copyDiagnostics"],
+body.setup-page a[onclick*="showQr"] {
+  display: none !important;
+}
+/* also hide the floating version text */
+body.setup-page > div:last-of-type {
+  display: none !important;
+}
+
 </style>
 </head>
 <body>
