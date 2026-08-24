@@ -14,12 +14,7 @@ DHT_PIN = board.D4
 BUZZER_PIN = 6
 
 class HardwareManager:
-    def __init__(
-        self,
-        hold_time: float = 0.5,
-        multi_tap_window: float = 0.45,
-        buzzer_enabled: bool = True,
-    ):
+    def __init__(self, hold_time=0.5, multi_tap_window=0.45, buzzer_enabled=True):
         self.hold_time = hold_time
         self.multi_tap_window = multi_tap_window
         self.buzzer_enabled = buzzer_enabled
@@ -33,26 +28,24 @@ class HardwareManager:
         self.lcd = character_lcd.Character_LCD_Mono(rs, en, d4, d5, d6, d7, 16, 2)
 
         self.dht = adafruit_dht.DHT11(DHT_PIN)
-
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(TOUCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
         GPIO.setup(BUZZER_PIN, GPIO.OUT)
         GPIO.output(BUZZER_PIN, GPIO.LOW)
 
-        self._last1 = ""
-        self._last2 = ""
-        self._last_temp: Optional[float] = None
+        self._last1 = self._last2 = ""
         self._last_hum: Optional[float] = None
 
-    def beep(self, duration: float = 0.04) -> None:
+    def beep(self, duration=0.04, times=1):
         if not self.buzzer_enabled:
             return
-        GPIO.output(BUZZER_PIN, GPIO.HIGH)
-        time.sleep(duration)
-        GPIO.output(BUZZER_PIN, GPIO.LOW)
+        for _ in range(times):
+            GPIO.output(BUZZER_PIN, GPIO.HIGH)
+            time.sleep(duration)
+            GPIO.output(BUZZER_PIN, GPIO.LOW)
+            time.sleep(0.05)
 
-    def display(self, line1: str, line2: str = "") -> None:
-        """Always exactly 16 characters, left-aligned, flicker-free."""
+    def display(self, line1: str, line2: str = ""):
         l1 = f"{(line1 or '')[:16]:<16}"
         l2 = f"{(line2 or '')[:16]:<16}"
         if l1 != self._last1 or l2 != self._last2:
@@ -67,7 +60,7 @@ class HardwareManager:
         while GPIO.input(TOUCH_PIN) == GPIO.HIGH:
             time.sleep(0.012)
             if time.time() - start >= self.hold_time:
-                self.beep(0.11)
+                self.beep(0.12)
                 while GPIO.input(TOUCH_PIN) == GPIO.HIGH:
                     time.sleep(0.012)
                 return "HOLD"
@@ -85,18 +78,17 @@ class HardwareManager:
             time.sleep(0.012)
         return "TRIPLE" if count >= 3 else "DOUBLE" if count == 2 else "SINGLE"
 
-    def read_dht(self) -> Tuple[Optional[float], Optional[float]]:
+    def read_humidity(self) -> Optional[float]:
         try:
-            t = self.dht.temperature
             h = self.dht.humidity
-            if t is not None and h is not None:
-                self._last_temp, self._last_hum = t, h
-                return t, h
+            if h is not None:
+                self._last_hum = h
+                return h
         except RuntimeError:
             pass
-        return self._last_temp, self._last_hum
+        return self._last_hum
 
-    def cleanup(self) -> None:
+    def cleanup(self):
         try:
             self.lcd.clear()
         except Exception:

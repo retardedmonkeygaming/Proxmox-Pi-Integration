@@ -1,5 +1,4 @@
 import sqlite3
-from typing import Optional
 
 DB_FILE = "monitor.db"
 
@@ -12,64 +11,55 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS server_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            node_name TEXT,
             cpu_usage REAL,
             ram_used_gb REAL,
             ram_total_gb REAL,
             disk_pct REAL,
             net_in_kbps REAL,
             net_out_kbps REAL,
-            active_vms INTEGER
+            active_vms INTEGER,
+            online INTEGER DEFAULT 1
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS environment_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            humidity REAL
         )
     """)
     # Safe migrations
     for col, typ in [
+        ("node_name", "TEXT"),
         ("disk_pct", "REAL"),
         ("net_in_kbps", "REAL"),
         ("net_out_kbps", "REAL"),
         ("active_vms", "INTEGER"),
+        ("online", "INTEGER"),
     ]:
         try:
             cur.execute(f"ALTER TABLE server_logs ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
             pass
+    conn.commit()
+    conn.close()
+
+def log_server_metrics(node_name: str, cpu, ram_u, ram_t, disk, net_in, net_out, vms, online=1):
+    conn = sqlite3.connect(DB_FILE, timeout=15)
+    cur = conn.cursor()
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS environment_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            temperature REAL,
-            humidity REAL
-        )
-    """)
+        INSERT INTO server_logs
+        (node_name, cpu_usage, ram_used_gb, ram_total_gb, disk_pct,
+         net_in_kbps, net_out_kbps, active_vms, online)
+        VALUES (?,?,?,?,?,?,?,?,?)
+    """, (node_name, cpu, ram_u, ram_t, disk, net_in, net_out, vms, online))
     conn.commit()
     conn.close()
 
-def log_server_metrics(
-    cpu: float,
-    ram_used: float,
-    ram_total: float,
-    disk_pct: float,
-    net_in: float,
-    net_out: float,
-    active_vms: int,
-) -> None:
+def log_humidity(humidity: float):
     conn = sqlite3.connect(DB_FILE, timeout=15)
     cur = conn.cursor()
-    cur.execute(
-        """INSERT INTO server_logs
-           (cpu_usage, ram_used_gb, ram_total_gb, disk_pct,
-            net_in_kbps, net_out_kbps, active_vms)
-           VALUES (?,?,?,?,?,?,?)""",
-        (cpu, ram_used, ram_total, disk_pct, net_in, net_out, active_vms),
-    )
-    conn.commit()
-    conn.close()
-
-def log_env_metrics(temp: float, humidity: float) -> None:
-    conn = sqlite3.connect(DB_FILE, timeout=15)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO environment_logs (temperature, humidity) VALUES (?,?)",
-        (temp, humidity),
-    )
+    cur.execute("INSERT INTO environment_logs (humidity) VALUES (?)", (humidity,))
     conn.commit()
     conn.close()
