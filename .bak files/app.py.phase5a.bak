@@ -197,41 +197,6 @@ def api_prune(days: int = 14):
     n = prune_old_logs(days)
     return {"ok": True, "deleted": n}
 
-
-@app.get("/api/discover")
-def api_discover():
-    """Scan local /24 for open Proxmox ports (8006). Best-effort, may take a few seconds."""
-    import socket
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    found = []
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        my_ip = s.getsockname()[0]
-        s.close()
-        base = ".".join(my_ip.split(".")[:3]) + "."
-    except Exception:
-        return {"ok": False, "nodes": [], "error": "no local ip"}
-    def check(i):
-        ip = base + str(i)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.35)
-            r = sock.connect_ex((ip, 8006))
-            sock.close()
-            if r == 0:
-                return ip
-        except Exception:
-            pass
-        return None
-    with ThreadPoolExecutor(max_workers=40) as ex:
-        futs = [ex.submit(check, i) for i in range(1, 255)]
-        for f in as_completed(futs):
-            ip = f.result()
-            if ip:
-                found.append({"ip": ip, "name": "pve-" + ip.split(".")[-1]})
-    return {"ok": True, "nodes": found}
-
 @app.get("/api/health")
 def api_health():
     cfg = config.load_config()
@@ -559,11 +524,6 @@ body.theme-nord      { --accent:#88c0d0; --purple:#b48ead; --bg:#2e3440; --card:
 body.cinema .topbar, body.cinema .side, body.cinema #nodesCol { display:none !important; }
 body.cinema .graphs { position:fixed; inset:0; z-index:50; background:var(--bg); padding:12px; }
 
-
-body.guest-mode .actions button:not(.btn-icon),
-body.guest-mode .btn-reboot,
-body.guest-mode .btn-shutdown { display: none !important; }
-body.guest-mode #bottomNav { display: none !important; }
 </style></head><body>
 <div class="card">
 <h1>PVE Node Monitor</h1>
@@ -700,11 +660,6 @@ body.theme-nord      { --accent:#88c0d0; --purple:#b48ead; --bg:#2e3440; --card:
 body.cinema .topbar, body.cinema .side, body.cinema #nodesCol { display:none !important; }
 body.cinema .graphs { position:fixed; inset:0; z-index:50; background:var(--bg); padding:12px; }
 
-
-body.guest-mode .actions button:not(.btn-icon),
-body.guest-mode .btn-reboot,
-body.guest-mode .btn-shutdown { display: none !important; }
-body.guest-mode #bottomNav { display: none !important; }
 </style></head><body>
 <div class="card">
 <h1>Pin Layout</h1>
@@ -919,11 +874,6 @@ body.theme-nord      { --accent:#88c0d0; --purple:#b48ead; --bg:#2e3440; --card:
 body.cinema .topbar, body.cinema .side, body.cinema #nodesCol { display:none !important; }
 body.cinema .graphs { position:fixed; inset:0; z-index:50; background:var(--bg); padding:12px; }
 
-
-body.guest-mode .actions button:not(.btn-icon),
-body.guest-mode .btn-reboot,
-body.guest-mode .btn-shutdown { display: none !important; }
-body.guest-mode #bottomNav { display: none !important; }
 </style></head>
 <body>
 <header>
@@ -937,7 +887,7 @@ body.guest-mode #bottomNav { display: none !important; }
     <span class="pill" id="onlinePill">–/– online</span>
     <button class="btn btn-primary" onclick="openAddModal()">+ Add node / server</button>
     <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openBulk()" title="Bulk power">Bulk</button>
-    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openImport()" title="Import"> Discover</button><button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:.75rem" onclick="openDiscover()">Import</button>
+    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openImport()" title="Import">Import</button>
     <button class="btn-ghost" onclick="openSettings()" title="Settings">⚙</button>
     <button class="btn-ghost" id="themeBtn" onclick="toggleTheme()" title="Theme">☾</button>
     <button class="btn-ghost" onclick="load()" title="Refresh">↻</button>
@@ -983,9 +933,7 @@ id="alertList" style="margin-top:8px;font-size:.72rem;color:var(--muted);max-hei
 </div>
   </div>
   <div class="graphs-wrap">
-    <div class="graphs-head"><div><h2>
-<div id="bigStats" style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 12px"></div>
-Graphs</h2><div class="sub">Live samples from the active node</div></div>
+    <div class="graphs-head"><div><h2>Graphs</h2><div class="sub">Live samples from the active node</div></div>
       <div style="display:flex;gap:6px;align-items:center">
         <select id="graphRange" onchange="changeRange()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:.78rem">
           <option value="1h">1h</option><option value="6h">6h</option><option value="24h">24h</option><option value="7d">7d</option>
@@ -1050,12 +998,6 @@ Graphs</h2><div class="sub">Live samples from the active node</div></div>
 </select>
 <label>UI PIN (blank = off)</label>
 <input id="sPin" type="password" maxlength="8" placeholder="e.g. 1234" style="width:100%;margin-bottom:8px">
-
-<label>Webhook URL (optional)</label>
-<input id="sWebhook" placeholder="https://…" style="width:100%;margin-bottom:8px">
-<label><input type="checkbox" id="sOfflineSound" checked> Offline sound</label>
-<label><input type="checkbox" id="sShowMinMax" checked> Show min/max on graphs</label>
-
 <label><input type="checkbox" id="sClock12"> 12-hour clock</label>
 
   </div>
@@ -1147,21 +1089,6 @@ function openSettings(){document.getElementById('drawerBg').classList.add('open'
 function closeSettings(){document.getElementById('drawerBg').classList.remove('open');document.getElementById('drawer').classList.remove('open')}
 
 let uiPin = '';
-
-function applyGuestMode() {
-  const unlocked = sessionStorage.getItem('pve_unlocked') === '1';
-  const hasPin = !!(window.uiPin);
-  // if PIN is set and not unlocked → guest
-  const guest = hasPin && !unlocked;
-  document.body.classList.toggle('guest-mode', guest);
-  // hide power / settings / add / bulk / delete controls
-  document.querySelectorAll('.btn-reboot, .btn-shutdown, #bottomNav, [onclick*="openSettings"], [onclick*="openAddModal"], [onclick*="openBulk"], [onclick*="deleteNode"], [onclick*="power("]').forEach(el => {
-    if (guest) el.style.display = 'none';
-    else el.style.display = '';
-  });
-  // keep graphs + cards visible
-}
-
 function applyPinLock() {
   if (!uiPin) return;
   const unlocked = sessionStorage.getItem('pve_unlocked') === '1';
@@ -1172,7 +1099,6 @@ function checkPin() {
   if (v === uiPin) {
     sessionStorage.setItem('pve_unlocked', '1');
     document.getElementById('pinOverlay').style.display = 'none';
-    applyGuestMode();
     document.getElementById('pinErr').style.display = 'none';
   } else {
     document.getElementById('pinErr').style.display = 'block';
@@ -1195,7 +1121,6 @@ function toggleSet(el,key){el.classList.toggle('on');settings[key]=el.classList.
 async function saveAllSettings(){if(document.getElementById('sDensity')){settings.density=sDensity.value;applyDensity(settings.density);
   uiPin = settings.ui_pin || '';
   applyPinLock();
-  applyGuestMode();
   applyThemePack(settings.theme_pack || 'default');
   applyLayoutPreset(settings.layout_preset || 'work');
   if (settings.clock_12h) window.clock12h = true;}
@@ -1207,11 +1132,6 @@ if(document.getElementById('sFlashInt'))settings.flash_interval=parseInt(sFlashI
 if(document.getElementById('sAlertRep'))settings.alert_repeat_sec=parseInt(sAlertRep.value)||25;
 await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});toast('Settings saved');restartRefresh();load()}
 async function testBuzzer(){await fetch('/api/buzzer/test',{method:'POST'});toast('Buzzer test sent')}
-function rerunWizard() {
-  if (!confirm('Reset setup flags and open wizard? (nodes kept)')) return;
-  fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({setup_done:false, pins_done:false})}).then(()=> location.href='/setup');
-}
 function backupConfig(){window.location='/api/config/backup'}
 
 function exportCsv(){window.location='/api/export/csv'}
@@ -1224,94 +1144,26 @@ async function saveNode(){const payload={name:mName.value.trim(),ip:mIp.value.tr
 if(!payload.name||!payload.ip){toast('Name and IP required');return}
 const r=editName?await fetch('/api/nodes/'+encodeURIComponent(editName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}):await fetch('/api/nodes/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
 const j=await r.json();if(j.ok){closeAddModal();load();toast(editName?'Saved':'Node added')}else toast('Error: '+(j.error||'unknown'))}
-
-let pendingDelete = null;
-async function deleteNode(name) {
-  if (!confirm('Delete "' + name + '"? (undo available 8s)')) return;
-  pendingDelete = name;
-  // soft: just hide card
-  document.querySelectorAll('.node-card').forEach(c => {
-    if (c.textContent.includes(name)) c.style.opacity = '0.3';
-  });
-  toast('Deleted – click Undo in toast area or wait', 8000);
-  // show undo via a temporary button if possible
-  setTimeout(async () => {
-    if (pendingDelete === name) {
-      await fetch('/api/nodes/' + encodeURIComponent(name), {method:'DELETE'});
-      pendingDelete = null;
-      load();
-    }
-  }, 8000);
-}
-function undoDelete() {
-  if (!pendingDelete) return;
-  pendingDelete = null;
-  load();
-  toast('Delete cancelled');
-}
-
-async function deleteNode_DISABLED(name){if(!confirm('Delete "'+name+'"?'))return;await fetch('/api/nodes/'+encodeURIComponent(name),{method:'DELETE'});load();toast('Deleted')}
+async function deleteNode(name){if(!confirm('Delete "'+name+'"?'))return;await fetch('/api/nodes/'+encodeURIComponent(name),{method:'DELETE'});load();toast('Deleted')}
 function openGraphEdit(){setToggle('gCpu',graphVisible.cpu);setToggle('gRam',graphVisible.ram);setToggle('gNet',graphVisible.net);setToggle('gDisk',graphVisible.disk);graphModal.classList.add('open')}
 function closeGraphEdit(){graphModal.classList.remove('open');fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({graph_visible:graphVisible})})}
 function toggleGraph(el,key){el.classList.toggle('on');graphVisible[key]=el.classList.contains('on');applyGraphVisibility()}
 function applyGraphVisibility(){cCpu.classList.toggle('hidden',!graphVisible.cpu);cRam.classList.toggle('hidden',!graphVisible.ram);cNet.classList.toggle('hidden',!graphVisible.net);cDisk.classList.toggle('hidden',!graphVisible.disk)}
 async function lcdAction(act){const r=await fetch('/api/lcd/'+act,{method:'POST'});const j=await r.json();if(j.state)lcdMode.textContent=j.state.mode||'PAGES';toast('LCD → '+act)}
-let lastPowerAt = 0;
-async function power(name, action) {
-  const limit = (settings && settings.power_rate_limit_sec) || 30;
-  const now = Date.now()/1000;
-  if (now - lastPowerAt < limit) {
-    toast('Wait ' + Math.ceil(limit - (now-lastPowerAt)) + 's (rate limit)');
-    return;
-  }
-  // countdown confirm
-  let sec = 3;
-  const id = toast('Really ' + action + ' "' + name + '"? ' + sec + '…', 4000);
-  const t = setInterval(()=>{
-    sec--;
-    if (sec <= 0) { clearInterval(t); }
-  }, 1000);
-  if (!confirm('Confirm ' + action + ' of "' + name + '"?')) return;
-  lastPowerAt = now;
-  const r = await fetch('/api/power/' + encodeURIComponent(name) + '/' + action, {method:'POST'});
-  const j = await r.json();
-  toast(j.ok ? action + ' sent' : 'Failed');
-});const j=await r.json();toast(j.ok?action+' sent':'Failed')}
+async function power(name,action){if(!confirm('Really '+action+' "'+name+'"?'))return;const r=await fetch('/api/power/'+encodeURIComponent(name)+'/'+action,{method:'POST'});const j=await r.json();toast(j.ok?action+' sent':'Failed')}
 function restartRefresh(){if(refreshTimer)clearInterval(refreshTimer);refreshTimer=setInterval(load,(settings.auto_refresh||5)*1000)}
-
-async function sendWebhook(payload) {
-  const url = (settings && settings.webhook_url) || '';
-  if (!url) return;
-  try {
-    await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({...payload, source:'pve-node-monitor'})});
-  } catch(e) {}
-}
-
-
-const offlineAudio = (()=>{ try {
-  const ctx = new (window.AudioContext||window.webkitAudioContext)();
-  return () => {
-    if (settings && settings.offline_sound === false) return;
-    const o = ctx.createOscillator(); const g = ctx.createGain();
-    o.connect(g); g.connect(ctx.destination);
-    o.frequency.value = 440; g.gain.value = 0.08;
-    o.start(); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.4); o.stop(ctx.currentTime+0.4);
-  };
-} catch(e){ return ()=>{}; } })();
-
 async function load(){
   const [nodes,logs,lcd]=await Promise.all([fetch('/api/current').then(r=>r.json()),fetch('/api/logs/server?limit=40').then(r=>r.json()),fetch('/api/lcd').then(r=>r.json()).catch(()=>null)]);
   allNodesCache=nodes;onlinePill.textContent=nodes.filter(n=>n.online==1).length+'/'+nodes.length+' online';
-  if(!nodes.length){document.getElementById('nodesCol').innerHTML='<div class="empty-state"><h3>No nodes yet</h3><p>Add a Proxmox node to start monitoring.</p><button class="btn btn-primary" style="margin-top:12px" onclick="openAddModal()">+ Add node</button></div>';renderBigStats(nodes); renderTagChips(nodes);
+  if(!nodes.length){document.getElementById('nodesCol').innerHTML='<div class="empty-state"><h3>No nodes yet</h3><p>Add a Proxmox node to start monitoring.</p><button class="btn btn-primary" style="margin-top:12px" onclick="openAddModal()">+ Add node</button></div>';renderTagChips(nodes);
   loadCharts();return}
   const col=document.getElementById('nodesCol');col.innerHTML='';
   nodes.forEach(n=>{const on=n.online==1;
   const ageSec = (()=>{try{const d=new Date((n.timestamp||'').includes('T')?n.timestamp: (n.timestamp||'').replace(' ','T')+'Z');return Math.floor((Date.now()-d.getTime())/1000)}catch(e){return 999}})();const ramPct=n.ram_total_gb?(n.ram_used_gb/n.ram_total_gb*100):0;
   const card=document.createElement('div');card.className='node-card'+(on?'':' offline')+(ageSec>60?' stale':'');
   // offline toast
-  if(prevOnline[n.node_name]===1 && !on) sendWebhook({event:'offline', node:n.node_name}); offlineAudio(); toast('⚠ '+n.node_name+' went offline', 6000);
-  if(prevOnline[n.node_name]===0 && on) sendWebhook({event:'online', node:n.node_name}); toast('✓ '+n.node_name+' back online');
+  if(prevOnline[n.node_name]===1 && !on) toast('⚠ '+n.node_name+' went offline', 6000);
+  if(prevOnline[n.node_name]===0 && on) toast('✓ '+n.node_name+' back online');
   prevOnline[n.node_name]=on?1:0;
   const fav=n.favorite?'★':'☆';
   const seen=relTime(n.timestamp);
@@ -1331,7 +1183,7 @@ async function load(){
   if(lcd&&lcd.lines){lcdPreview.textContent=(lcd.lines[0]||'').padEnd(16)+'\n'+(lcd.lines[1]||'').padEnd(16);lcdMode.textContent=lcd.mode||'PAGES';
   if(lcd.alerting){alertStatus.textContent='⚠ Threshold exceeded';alertStatus.classList.add('active')}else{alertStatus.textContent='Quiet. Thresholds fire on the LCD and buzzer.';alertStatus.classList.remove('active')}}
   else if(nodes.length){const n=nodes[0];lcdPreview.textContent=`CPU: ${(n.cpu_usage||0).toFixed(1)}%    \nRAM: ${(n.ram_used_gb||0).toFixed(1)}/${(n.ram_total_gb||0).toFixed(1)}G`}
-  renderBigStats(nodes); renderTagChips(nodes);
+  renderTagChips(nodes);
   loadCharts();
 }
 
@@ -1366,17 +1218,8 @@ async function exportGraphsPng() {
 
 function changeRange() {
   graphRange = document.getElementById('graphRange').value;
-  await renderBigStats(nodes); renderTagChips(nodes);
+  await renderTagChips(nodes);
   loadCharts();
-}
-
-
-function showMinMax(logs, key, elId) {
-  if (!settings || settings.show_minmax === false) return;
-  const vals = logs.map(x => x[key]).filter(v => v != null);
-  if (!vals.length) return;
-  const mn = Math.min(...vals), mx = Math.max(...vals), avg = vals.reduce((a,b)=>a+b,0)/vals.length;
-  // append small text if container exists
 }
 
 async function loadCharts() {
@@ -1504,7 +1347,6 @@ document.addEventListener('keydown', (e) => {
   if (k === 's') { e.preventDefault(); openSettings(); }
   if (k === 'a') { e.preventDefault(); openAddModal(); }
   if (k === 'c') { e.preventDefault(); toggleCinema(); }
-  if (k === 'u') { e.preventDefault(); undoDelete(); }
   if (k === 'escape') { closeSettings(); closeAddModal(); closeGraphEdit(); }
 });
 
@@ -1611,28 +1453,6 @@ let allNodesCache = [];
 
 
 let activeTag = null;
-
-function renderBigStats(nodes) {
-  const box = document.getElementById('bigStats');
-  if (!box) return;
-  const online = nodes.filter(n => n.online == 1);
-  const cpu = online.length ? (online.reduce((s,n)=>s+(n.cpu_usage||0),0)/online.length) : 0;
-  const ram = online.length ? (online.reduce((s,n)=>s+(n.ram_used_gb||0),0)) : 0;
-  box.innerHTML = `
-    <div class="card" style="flex:1;min-width:100px;text-align:center;padding:10px">
-      <div style="font-size:1.4rem;font-weight:700">${online.length}/${nodes.length}</div>
-      <div style="font-size:.7rem;opacity:.6">Online</div>
-    </div>
-    <div class="card" style="flex:1;min-width:100px;text-align:center;padding:10px">
-      <div style="font-size:1.4rem;font-weight:700">${cpu.toFixed(0)}%</div>
-      <div style="font-size:.7rem;opacity:.6">Avg CPU</div>
-    </div>
-    <div class="card" style="flex:1;min-width:100px;text-align:center;padding:10px">
-      <div style="font-size:1.4rem;font-weight:700">${ram.toFixed(1)}G</div>
-      <div style="font-size:.7rem;opacity:.6">RAM used</div>
-    </div>`;
-}
-
 function renderTagChips(nodes) {
   const box = document.getElementById('tagChips');
   if (!box) return;
@@ -1679,13 +1499,6 @@ function openDetail(n) {
   dRam.value = n.ram_alert != null ? n.ram_alert : '';
   dDisk.value = n.disk_alert != null ? n.disk_alert : '';
   detailModal.classList.add('open');
-  // quick guests button if not present
-  if (!document.getElementById('detailGuestsBtn')) {
-    const b = document.createElement('button'); b.id='detailGuestsBtn'; b.className='btn btn-ghost';
-    b.textContent='View Guests'; b.style.marginTop='8px';
-    b.onclick=()=>{closeDetail(); openGuests(detailName);};
-    detailModal.querySelector('.modal-box')?.appendChild(b);
-  }
   loadDetailCharts(n.node_name);
 }
 function closeDetail(){detailModal.classList.remove('open');detailName=null}
@@ -1704,37 +1517,6 @@ async function saveDetail() {
   });
   toast('Saved');
   closeDetail();
-  load();
-}
-
-
-async function openDiscover() {
-  toast('Scanning LAN for :8006 …');
-  const r = await fetch('/api/discover').then(x => x.json());
-  if (!r.ok) { toast(r.error || 'Scan failed'); return; }
-  if (!r.nodes.length) { toast('No Proxmox hosts found'); return; }
-  const list = r.nodes.map(n =>
-    `<label style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
-      <input type="checkbox" value="${n.ip}" data-name="${n.name}"> ${n.ip}
-    </label>`
-  ).join('');
-  const html = `<div id="discModal" class="modal open"><div class="modal-box" style="max-width:360px">
-    <h3>Discovered hosts</h3><div style="max-height:240px;overflow:auto">${list}</div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn btn-primary" onclick="importDiscovered()">Add selected</button>
-      <button class="btn btn-ghost" onclick="document.getElementById('discModal').remove()">Cancel</button>
-    </div></div></div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-}
-async function importDiscovered() {
-  const boxes = [...document.querySelectorAll('#discModal input:checked')];
-  if (!boxes.length) { toast('Select at least one'); return; }
-  const nodes = boxes.map(b => ({name: b.dataset.name, ip: b.value, node: 'pve', user: 'root@pam', password: ''}));
-  const r = await fetch('/api/nodes/import', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({nodes})});
-  const j = await r.json();
-  toast(j.ok ? ('Added ' + j.added) : (j.error || 'Failed'));
-  document.getElementById('discModal')?.remove();
   load();
 }
 

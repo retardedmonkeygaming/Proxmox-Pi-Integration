@@ -1,0 +1,15 @@
+[Unit]
+Description=PVE Node Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pve-node-monitor
+ExecStart=/usr/bin/python3 main.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

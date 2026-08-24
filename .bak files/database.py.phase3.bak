@@ -116,17 +116,6 @@ def get_activity(limit: int = 40) -> List[Dict]:
     conn.close()
     return [dict(r) for r in rows]
 
-
-def prune_old_logs(days: int = 14):
-    """Keep only the last N days of server_logs."""
-    conn = sqlite3.connect(DB_FILE, timeout=15)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM server_logs WHERE timestamp < datetime('now', ?)", (f"-{days} days",))
-    deleted = cur.rowcount
-    conn.commit()
-    conn.close()
-    return deleted
-
 def get_logs_range(node: str = None, minutes: int = 60, limit: int = 200) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE, timeout=15)
     conn.row_factory = sqlite3.Row

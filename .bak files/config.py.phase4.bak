@@ -36,15 +36,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "quiet_hours": "",          # e.g. "22:00-07:00"
     "disk_free_gb_alert": None, # absolute free GB threshold
     "retention_days": 14,
-    "ui_pin": "",              # empty = disabled
-    "clock_12h": False,
-    "theme_pack": "default",  # default|cyberpunk|terminal|nord
-    "layout_preset": "work",  # work|night|minimal
-    "webhook_url": "",
-    "offline_sound": True,
-    "power_rate_limit_sec": 30,
-    "lcd_pages_enabled": [0,1,2,3,4],
-    "show_minmax": True,
     "theme": "dark",
     "accent": "#3b82f6",
     "graph_order": ["cpu", "ram", "net"],

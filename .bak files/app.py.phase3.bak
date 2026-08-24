@@ -190,48 +190,6 @@ def api_lcd_action(action: str):
     return {"ok": True, "state": lcd_state}
 
 
-
-@app.post("/api/prune")
-def api_prune(days: int = 14):
-    from database import prune_old_logs
-    n = prune_old_logs(days)
-    return {"ok": True, "deleted": n}
-
-
-@app.get("/api/discover")
-def api_discover():
-    """Scan local /24 for open Proxmox ports (8006). Best-effort, may take a few seconds."""
-    import socket
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    found = []
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        my_ip = s.getsockname()[0]
-        s.close()
-        base = ".".join(my_ip.split(".")[:3]) + "."
-    except Exception:
-        return {"ok": False, "nodes": [], "error": "no local ip"}
-    def check(i):
-        ip = base + str(i)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.35)
-            r = sock.connect_ex((ip, 8006))
-            sock.close()
-            if r == 0:
-                return ip
-        except Exception:
-            pass
-        return None
-    with ThreadPoolExecutor(max_workers=40) as ex:
-        futs = [ex.submit(check, i) for i in range(1, 255)]
-        for f in as_completed(futs):
-            ip = f.result()
-            if ip:
-                found.append({"ip": ip, "name": "pve-" + ip.split(".")[-1]})
-    return {"ok": True, "nodes": found}
-
 @app.get("/api/health")
 def api_health():
     cfg = config.load_config()
@@ -512,10 +470,6 @@ def dashboard():
 
 SETUP_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0f172a">
-<meta name="apple-mobile-web-app-capable" content="yes">
-
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PVE Node Monitor – Setup</title>
 <style>
@@ -531,9 +485,6 @@ input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(
 .add{background:transparent;border:1px dashed #4b5563;color:var(--muted);width:100%;padding:9px;border-radius:9px;cursor:pointer;margin-top:6px}
 
 @media (max-width: 780px) {
-  #bottomNav { display: flex !important; }
-  body { padding-bottom: 56px; }
-
   .layout { flex-direction: column; }
   #nodesCol, .side { width: 100% !important; }
   .node-card { margin-bottom: 10px; }
@@ -551,19 +502,6 @@ input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(
 }
 .node-card.stale .node-meta:last-of-type { color: #f87171 !important; }
 
-
-/* Theme packs */
-body.theme-cyberpunk { --accent:#ff2a6d; --purple:#05d9e8; --bg:#0d0221; --card:#1a0a2e; }
-body.theme-terminal  { --accent:#33ff33; --purple:#33ff99; --bg:#0a0a0a; --card:#111; color:#33ff33; }
-body.theme-nord      { --accent:#88c0d0; --purple:#b48ead; --bg:#2e3440; --card:#3b4252; }
-body.cinema .topbar, body.cinema .side, body.cinema #nodesCol { display:none !important; }
-body.cinema .graphs { position:fixed; inset:0; z-index:50; background:var(--bg); padding:12px; }
-
-
-body.guest-mode .actions button:not(.btn-icon),
-body.guest-mode .btn-reboot,
-body.guest-mode .btn-shutdown { display: none !important; }
-body.guest-mode #bottomNav { display: none !important; }
 </style></head><body>
 <div class="card">
 <h1>PVE Node Monitor</h1>
@@ -601,57 +539,10 @@ function addNode(){document.getElementById('nodes').insertAdjacentHTML('beforeen
   <button class="btn btn-ghost" style="padding:6px 10px" onclick="clearQuick()">Clear</button>
 </div>
 
-
-<div id="alertHistoryModal" class="modal">
-  <div class="modal-box" style="max-width:480px;max-height:80vh;overflow:auto">
-    <h3>Alert history</h3>
-    <div id="alertHistoryList" style="font-size:.85rem"></div>
-    <button class="btn btn-ghost" style="margin-top:12px" onclick="closeAlertHistory()">Close</button>
-  </div>
-</div>
-
-
-<div id="pinOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;
-  align-items:center;justify-content:center;flex-direction:column;gap:12px">
-  <div style="font-size:1.1rem;opacity:.8">Enter PIN</div>
-  <input id="pinInput" type="password" maxlength="8" style="font-size:1.4rem;text-align:center;width:140px;
-    padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:inherit"
-    onkeydown="if(event.key==='Enter')checkPin()">
-  <button class="btn btn-primary" onclick="checkPin()">Unlock</button>
-  <div id="pinErr" style="color:#f87171;font-size:.85rem;display:none">Wrong PIN</div>
-</div>
-
-
-<div style="text-align:center;padding:16px 8px 24px;opacity:.55;font-size:.75rem">
-  PVE Node Monitor <span id="verLabel">v1.9.0</span> ·
-  <a href="#" onclick="copyDiagnostics();return false" style="color:var(--accent)">Copy diagnostics</a> ·
-  <a href="#" onclick="showQr();return false" style="color:var(--accent)">QR</a>
-</div>
-<div id="qrModal" class="modal">
-  <div class="modal-box" style="text-align:center;max-width:280px">
-    <h3>Open on phone</h3>
-    <div id="qrBox" style="margin:12px auto"></div>
-    <button class="btn btn-ghost" onclick="document.getElementById('qrModal').classList.remove('open')">Close</button>
-  </div>
-</div>
-
-
-<nav id="bottomNav" style="display:none;position:fixed;bottom:0;left:0;right:0;background:var(--card);
-  border-top:1px solid var(--border);padding:8px 0;z-index:40;justify-content:space-around">
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="window.scrollTo(0,0)">Nodes</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openSettings()">Settings</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openAddModal()">Add</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="toggleCinema()">Cinema</button>
-</nav>
-
 </body></html>"""
 
 PINS_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0f172a">
-<meta name="apple-mobile-web-app-capable" content="yes">
-
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PVE Node Monitor – Pin Layout</title>
 <style>
@@ -672,9 +563,6 @@ input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(
 .dim{opacity:.35;pointer-events:none;filter:grayscale(1)}
 
 @media (max-width: 780px) {
-  #bottomNav { display: flex !important; }
-  body { padding-bottom: 56px; }
-
   .layout { flex-direction: column; }
   #nodesCol, .side { width: 100% !important; }
   .node-card { margin-bottom: 10px; }
@@ -692,19 +580,6 @@ input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(
 }
 .node-card.stale .node-meta:last-of-type { color: #f87171 !important; }
 
-
-/* Theme packs */
-body.theme-cyberpunk { --accent:#ff2a6d; --purple:#05d9e8; --bg:#0d0221; --card:#1a0a2e; }
-body.theme-terminal  { --accent:#33ff33; --purple:#33ff99; --bg:#0a0a0a; --card:#111; color:#33ff33; }
-body.theme-nord      { --accent:#88c0d0; --purple:#b48ead; --bg:#2e3440; --card:#3b4252; }
-body.cinema .topbar, body.cinema .side, body.cinema #nodesCol { display:none !important; }
-body.cinema .graphs { position:fixed; inset:0; z-index:50; background:var(--bg); padding:12px; }
-
-
-body.guest-mode .actions button:not(.btn-icon),
-body.guest-mode .btn-reboot,
-body.guest-mode .btn-shutdown { display: none !important; }
-body.guest-mode #bottomNav { display: none !important; }
 </style></head><body>
 <div class="card">
 <h1>Pin Layout</h1>
@@ -777,59 +652,12 @@ sync();
   <button class="btn btn-ghost" style="padding:6px 10px" onclick="clearQuick()">Clear</button>
 </div>
 
-
-<div id="alertHistoryModal" class="modal">
-  <div class="modal-box" style="max-width:480px;max-height:80vh;overflow:auto">
-    <h3>Alert history</h3>
-    <div id="alertHistoryList" style="font-size:.85rem"></div>
-    <button class="btn btn-ghost" style="margin-top:12px" onclick="closeAlertHistory()">Close</button>
-  </div>
-</div>
-
-
-<div id="pinOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;
-  align-items:center;justify-content:center;flex-direction:column;gap:12px">
-  <div style="font-size:1.1rem;opacity:.8">Enter PIN</div>
-  <input id="pinInput" type="password" maxlength="8" style="font-size:1.4rem;text-align:center;width:140px;
-    padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:inherit"
-    onkeydown="if(event.key==='Enter')checkPin()">
-  <button class="btn btn-primary" onclick="checkPin()">Unlock</button>
-  <div id="pinErr" style="color:#f87171;font-size:.85rem;display:none">Wrong PIN</div>
-</div>
-
-
-<div style="text-align:center;padding:16px 8px 24px;opacity:.55;font-size:.75rem">
-  PVE Node Monitor <span id="verLabel">v1.9.0</span> ·
-  <a href="#" onclick="copyDiagnostics();return false" style="color:var(--accent)">Copy diagnostics</a> ·
-  <a href="#" onclick="showQr();return false" style="color:var(--accent)">QR</a>
-</div>
-<div id="qrModal" class="modal">
-  <div class="modal-box" style="text-align:center;max-width:280px">
-    <h3>Open on phone</h3>
-    <div id="qrBox" style="margin:12px auto"></div>
-    <button class="btn btn-ghost" onclick="document.getElementById('qrModal').classList.remove('open')">Close</button>
-  </div>
-</div>
-
-
-<nav id="bottomNav" style="display:none;position:fixed;bottom:0;left:0;right:0;background:var(--card);
-  border-top:1px solid var(--border);padding:8px 0;z-index:40;justify-content:space-around">
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="window.scrollTo(0,0)">Nodes</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openSettings()">Settings</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openAddModal()">Add</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="toggleCinema()">Cinema</button>
-</nav>
-
 </body></html>"""
 
 # Dashboard – reuse previous polished version (abbreviated key parts, full in file)
 DASHBOARD_HTML = open("/home/workdir/artifacts/_dash_snippet.html").read() if False else r"""<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0f172a">
-<meta name="apple-mobile-web-app-capable" content="yes">
-
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PVE Node Monitor</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
@@ -891,9 +719,6 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
 .toast{position:fixed;bottom:68px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);color:var(--text);padding:9px 16px;border-radius:9px;font-size:.82rem;z-index:300;opacity:0;transition:opacity .25s;pointer-events:none}.toast.show{opacity:1}
 
 @media (max-width: 780px) {
-  #bottomNav { display: flex !important; }
-  body { padding-bottom: 56px; }
-
   .layout { flex-direction: column; }
   #nodesCol, .side { width: 100% !important; }
   .node-card { margin-bottom: 10px; }
@@ -911,19 +736,6 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
 }
 .node-card.stale .node-meta:last-of-type { color: #f87171 !important; }
 
-
-/* Theme packs */
-body.theme-cyberpunk { --accent:#ff2a6d; --purple:#05d9e8; --bg:#0d0221; --card:#1a0a2e; }
-body.theme-terminal  { --accent:#33ff33; --purple:#33ff99; --bg:#0a0a0a; --card:#111; color:#33ff33; }
-body.theme-nord      { --accent:#88c0d0; --purple:#b48ead; --bg:#2e3440; --card:#3b4252; }
-body.cinema .topbar, body.cinema .side, body.cinema #nodesCol { display:none !important; }
-body.cinema .graphs { position:fixed; inset:0; z-index:50; background:var(--bg); padding:12px; }
-
-
-body.guest-mode .actions button:not(.btn-icon),
-body.guest-mode .btn-reboot,
-body.guest-mode .btn-shutdown { display: none !important; }
-body.guest-mode #bottomNav { display: none !important; }
 </style></head>
 <body>
 <header>
@@ -937,7 +749,7 @@ body.guest-mode #bottomNav { display: none !important; }
     <span class="pill" id="onlinePill">–/– online</span>
     <button class="btn btn-primary" onclick="openAddModal()">+ Add node / server</button>
     <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openBulk()" title="Bulk power">Bulk</button>
-    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openImport()" title="Import"> Discover</button><button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:.75rem" onclick="openDiscover()">Import</button>
+    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openImport()" title="Import">Import</button>
     <button class="btn-ghost" onclick="openSettings()" title="Settings">⚙</button>
     <button class="btn-ghost" id="themeBtn" onclick="toggleTheme()" title="Theme">☾</button>
     <button class="btn-ghost" onclick="load()" title="Refresh">↻</button>
@@ -961,10 +773,7 @@ body.guest-mode #bottomNav { display: none !important; }
     <div class="side-card">
       <h3>Alerts <button class="btn btn-ghost" style="float:right;width:auto;padding:2px 8px;font-size:.7rem" onclick="ackAll()">Ack all</button></h3>
       <div class="alert-box" id="alertStatus">Quiet. Thresholds fire on the LCD and buzzer.</div>
-      <div 
-<button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:.75rem;margin-left:6px"
-        onclick="openAlertHistory()">History</button>
-id="alertList" style="margin-top:8px;font-size:.72rem;color:var(--muted);max-height:100px;overflow-y:auto"></div>
+      <div id="alertList" style="margin-top:8px;font-size:.72rem;color:var(--muted);max-height:100px;overflow-y:auto"></div>
     </div>
     <div class="side-card">
       <h3>Activity</h3>
@@ -983,9 +792,7 @@ id="alertList" style="margin-top:8px;font-size:.72rem;color:var(--muted);max-hei
 </div>
   </div>
   <div class="graphs-wrap">
-    <div class="graphs-head"><div><h2>
-<div id="bigStats" style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 12px"></div>
-Graphs</h2><div class="sub">Live samples from the active node</div></div>
+    <div class="graphs-head"><div><h2>Graphs</h2><div class="sub">Live samples from the active node</div></div>
       <div style="display:flex;gap:6px;align-items:center">
         <select id="graphRange" onchange="changeRange()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:.78rem">
           <option value="1h">1h</option><option value="6h">6h</option><option value="24h">24h</option><option value="7d">7d</option>
@@ -1020,13 +827,7 @@ Graphs</h2><div class="sub">Live samples from the active node</div></div>
   <div class="set-group"><label>Hostname flash interval (s)</label><input class="set-input" type="number" id="sFlashInt" min="5" max="60"></div>
   <div class="set-group"><label>Alert repeat (s)</label><input class="set-input" type="number" id="sAlertRep" min="5" max="120"></div>
   <div class="set-group"><label>CPU alert %</label><input class="set-input" type="number" id="sCpu" min="1" max="100"></div>
-  <div class="set-group"><label>Disk alert %</label><input class="set-input" type="number" id="sDisk" min="1" max="100">
-
-<label>Quiet hours (HH:MM-HH:MM)</label>
-<input id="sQuietHours" placeholder="22:00-07:00" style="width:100%;margin-bottom:8px">
-<label>Disk free alert (GB left)</label>
-<input id="sDiskFree" type="number" placeholder="e.g. 20" style="width:100%;margin-bottom:8px">
-</div>
+  <div class="set-group"><label>Disk alert %</label><input class="set-input" type="number" id="sDisk" min="1" max="100"></div>
   <div class="set-group"><label>RAM alert %</label><input class="set-input" type="number" id="sRam" min="1" max="100"></div>
   <div class="set-group"><label>Density</label>
     <select class="set-input" id="sDensity">
@@ -1034,30 +835,6 @@ Graphs</h2><div class="sub">Live samples from the active node</div></div>
       <option value="compact">Compact</option>
       <option value="dense">Dense</option>
     </select>
-
-<label>Theme pack</label>
-<select id="sThemePack" style="width:100%;margin-bottom:8px">
-  <option value="default">Default</option>
-  <option value="cyberpunk">Cyberpunk</option>
-  <option value="terminal">Terminal green</option>
-  <option value="nord">Nord</option>
-</select>
-<label>Layout preset</label>
-<select id="sLayout" style="width:100%;margin-bottom:8px">
-  <option value="work">Work</option>
-  <option value="night">Night</option>
-  <option value="minimal">Minimal</option>
-</select>
-<label>UI PIN (blank = off)</label>
-<input id="sPin" type="password" maxlength="8" placeholder="e.g. 1234" style="width:100%;margin-bottom:8px">
-
-<label>Webhook URL (optional)</label>
-<input id="sWebhook" placeholder="https://…" style="width:100%;margin-bottom:8px">
-<label><input type="checkbox" id="sOfflineSound" checked> Offline sound</label>
-<label><input type="checkbox" id="sShowMinMax" checked> Show min/max on graphs</label>
-
-<label><input type="checkbox" id="sClock12"> 12-hour clock</label>
-
   </div>
   <div class="drawer-actions">
     <button class="btn-cancel" onclick="testBuzzer()">Test buzzer</button>
@@ -1145,40 +922,6 @@ charts.net=new Chart(document.getElementById('chartNet'),{type:'line',data:{labe
 charts.disk=makeChart('chartDisk','#eab308');
 function openSettings(){document.getElementById('drawerBg').classList.add('open');document.getElementById('drawer').classList.add('open');loadSettings()}
 function closeSettings(){document.getElementById('drawerBg').classList.remove('open');document.getElementById('drawer').classList.remove('open')}
-
-let uiPin = '';
-
-function applyGuestMode() {
-  const unlocked = sessionStorage.getItem('pve_unlocked') === '1';
-  const hasPin = !!(window.uiPin);
-  // if PIN is set and not unlocked → guest
-  const guest = hasPin && !unlocked;
-  document.body.classList.toggle('guest-mode', guest);
-  // hide power / settings / add / bulk / delete controls
-  document.querySelectorAll('.btn-reboot, .btn-shutdown, #bottomNav, [onclick*="openSettings"], [onclick*="openAddModal"], [onclick*="openBulk"], [onclick*="deleteNode"], [onclick*="power("]').forEach(el => {
-    if (guest) el.style.display = 'none';
-    else el.style.display = '';
-  });
-  // keep graphs + cards visible
-}
-
-function applyPinLock() {
-  if (!uiPin) return;
-  const unlocked = sessionStorage.getItem('pve_unlocked') === '1';
-  document.getElementById('pinOverlay').style.display = unlocked ? 'none' : 'flex';
-}
-function checkPin() {
-  const v = document.getElementById('pinInput').value;
-  if (v === uiPin) {
-    sessionStorage.setItem('pve_unlocked', '1');
-    document.getElementById('pinOverlay').style.display = 'none';
-    applyGuestMode();
-    document.getElementById('pinErr').style.display = 'none';
-  } else {
-    document.getElementById('pinErr').style.display = 'block';
-  }
-}
-
 async function loadSettings(){const r=await fetch('/api/settings');settings=await r.json();applyTheme(settings.theme||'dark');
 setToggle('tBuzzer',settings.buzzer_enabled);setToggle('tPassive',settings.passive_buzzer_enabled);setToggle('tQuiet',settings.quiet_mode);setToggle('tFlash',settings.flash_hostname!==false);setToggle('tCompact',settings.compact_cards);
 if(document.getElementById('sDensity'))sDensity.value=settings.density||'comfortable';
@@ -1192,26 +935,13 @@ if(settings.standalone||!settings.has_lcd){const el=document.getElementById('lcd
 applyDensity(settings.density||'comfortable');}
 function setToggle(id,on){document.getElementById(id).classList.toggle('on',!!on)}
 function toggleSet(el,key){el.classList.toggle('on');settings[key]=el.classList.contains('on')}
-async function saveAllSettings(){if(document.getElementById('sDensity')){settings.density=sDensity.value;applyDensity(settings.density);
-  uiPin = settings.ui_pin || '';
-  applyPinLock();
-  applyGuestMode();
-  applyThemePack(settings.theme_pack || 'default');
-  applyLayoutPreset(settings.layout_preset || 'work');
-  if (settings.clock_12h) window.clock12h = true;}
+async function saveAllSettings(){if(document.getElementById('sDensity')){settings.density=sDensity.value;applyDensity(settings.density)}
 if(document.getElementById('sAccent')){settings.accent=sAccent.value;applyAccent(settings.accent)}
-settings.log_interval=parseInt(sLog.value)||10;settings.auto_refresh=parseInt(sRefresh.value)||5;settings.cpu_alert=parseInt(sCpu.value)||85;settings.disk_alert=parseInt(sDisk.value)||90;
-if(document.getElementById('sQuietHours'))settings.quiet_hours=sQuietHours.value||'';
-if(document.getElementById('sDiskFree'))settings.disk_free_gb_alert=sDiskFree.value===''?null:parseFloat(sDiskFree.value);settings.ram_alert=parseInt(sRam.value)||90;
+settings.log_interval=parseInt(sLog.value)||10;settings.auto_refresh=parseInt(sRefresh.value)||5;settings.cpu_alert=parseInt(sCpu.value)||85;settings.disk_alert=parseInt(sDisk.value)||90;settings.ram_alert=parseInt(sRam.value)||90;
 if(document.getElementById('sFlashInt'))settings.flash_interval=parseInt(sFlashInt.value)||10;
 if(document.getElementById('sAlertRep'))settings.alert_repeat_sec=parseInt(sAlertRep.value)||25;
 await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});toast('Settings saved');restartRefresh();load()}
 async function testBuzzer(){await fetch('/api/buzzer/test',{method:'POST'});toast('Buzzer test sent')}
-function rerunWizard() {
-  if (!confirm('Reset setup flags and open wizard? (nodes kept)')) return;
-  fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({setup_done:false, pins_done:false})}).then(()=> location.href='/setup');
-}
 function backupConfig(){window.location='/api/config/backup'}
 
 function exportCsv(){window.location='/api/export/csv'}
@@ -1224,94 +954,26 @@ async function saveNode(){const payload={name:mName.value.trim(),ip:mIp.value.tr
 if(!payload.name||!payload.ip){toast('Name and IP required');return}
 const r=editName?await fetch('/api/nodes/'+encodeURIComponent(editName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}):await fetch('/api/nodes/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
 const j=await r.json();if(j.ok){closeAddModal();load();toast(editName?'Saved':'Node added')}else toast('Error: '+(j.error||'unknown'))}
-
-let pendingDelete = null;
-async function deleteNode(name) {
-  if (!confirm('Delete "' + name + '"? (undo available 8s)')) return;
-  pendingDelete = name;
-  // soft: just hide card
-  document.querySelectorAll('.node-card').forEach(c => {
-    if (c.textContent.includes(name)) c.style.opacity = '0.3';
-  });
-  toast('Deleted – click Undo in toast area or wait', 8000);
-  // show undo via a temporary button if possible
-  setTimeout(async () => {
-    if (pendingDelete === name) {
-      await fetch('/api/nodes/' + encodeURIComponent(name), {method:'DELETE'});
-      pendingDelete = null;
-      load();
-    }
-  }, 8000);
-}
-function undoDelete() {
-  if (!pendingDelete) return;
-  pendingDelete = null;
-  load();
-  toast('Delete cancelled');
-}
-
-async function deleteNode_DISABLED(name){if(!confirm('Delete "'+name+'"?'))return;await fetch('/api/nodes/'+encodeURIComponent(name),{method:'DELETE'});load();toast('Deleted')}
+async function deleteNode(name){if(!confirm('Delete "'+name+'"?'))return;await fetch('/api/nodes/'+encodeURIComponent(name),{method:'DELETE'});load();toast('Deleted')}
 function openGraphEdit(){setToggle('gCpu',graphVisible.cpu);setToggle('gRam',graphVisible.ram);setToggle('gNet',graphVisible.net);setToggle('gDisk',graphVisible.disk);graphModal.classList.add('open')}
 function closeGraphEdit(){graphModal.classList.remove('open');fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({graph_visible:graphVisible})})}
 function toggleGraph(el,key){el.classList.toggle('on');graphVisible[key]=el.classList.contains('on');applyGraphVisibility()}
 function applyGraphVisibility(){cCpu.classList.toggle('hidden',!graphVisible.cpu);cRam.classList.toggle('hidden',!graphVisible.ram);cNet.classList.toggle('hidden',!graphVisible.net);cDisk.classList.toggle('hidden',!graphVisible.disk)}
 async function lcdAction(act){const r=await fetch('/api/lcd/'+act,{method:'POST'});const j=await r.json();if(j.state)lcdMode.textContent=j.state.mode||'PAGES';toast('LCD → '+act)}
-let lastPowerAt = 0;
-async function power(name, action) {
-  const limit = (settings && settings.power_rate_limit_sec) || 30;
-  const now = Date.now()/1000;
-  if (now - lastPowerAt < limit) {
-    toast('Wait ' + Math.ceil(limit - (now-lastPowerAt)) + 's (rate limit)');
-    return;
-  }
-  // countdown confirm
-  let sec = 3;
-  const id = toast('Really ' + action + ' "' + name + '"? ' + sec + '…', 4000);
-  const t = setInterval(()=>{
-    sec--;
-    if (sec <= 0) { clearInterval(t); }
-  }, 1000);
-  if (!confirm('Confirm ' + action + ' of "' + name + '"?')) return;
-  lastPowerAt = now;
-  const r = await fetch('/api/power/' + encodeURIComponent(name) + '/' + action, {method:'POST'});
-  const j = await r.json();
-  toast(j.ok ? action + ' sent' : 'Failed');
-});const j=await r.json();toast(j.ok?action+' sent':'Failed')}
+async function power(name,action){if(!confirm('Really '+action+' "'+name+'"?'))return;const r=await fetch('/api/power/'+encodeURIComponent(name)+'/'+action,{method:'POST'});const j=await r.json();toast(j.ok?action+' sent':'Failed')}
 function restartRefresh(){if(refreshTimer)clearInterval(refreshTimer);refreshTimer=setInterval(load,(settings.auto_refresh||5)*1000)}
-
-async function sendWebhook(payload) {
-  const url = (settings && settings.webhook_url) || '';
-  if (!url) return;
-  try {
-    await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({...payload, source:'pve-node-monitor'})});
-  } catch(e) {}
-}
-
-
-const offlineAudio = (()=>{ try {
-  const ctx = new (window.AudioContext||window.webkitAudioContext)();
-  return () => {
-    if (settings && settings.offline_sound === false) return;
-    const o = ctx.createOscillator(); const g = ctx.createGain();
-    o.connect(g); g.connect(ctx.destination);
-    o.frequency.value = 440; g.gain.value = 0.08;
-    o.start(); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.4); o.stop(ctx.currentTime+0.4);
-  };
-} catch(e){ return ()=>{}; } })();
-
 async function load(){
   const [nodes,logs,lcd]=await Promise.all([fetch('/api/current').then(r=>r.json()),fetch('/api/logs/server?limit=40').then(r=>r.json()),fetch('/api/lcd').then(r=>r.json()).catch(()=>null)]);
   allNodesCache=nodes;onlinePill.textContent=nodes.filter(n=>n.online==1).length+'/'+nodes.length+' online';
-  if(!nodes.length){document.getElementById('nodesCol').innerHTML='<div class="empty-state"><h3>No nodes yet</h3><p>Add a Proxmox node to start monitoring.</p><button class="btn btn-primary" style="margin-top:12px" onclick="openAddModal()">+ Add node</button></div>';renderBigStats(nodes); renderTagChips(nodes);
+  if(!nodes.length){document.getElementById('nodesCol').innerHTML='<div class="empty-state"><h3>No nodes yet</h3><p>Add a Proxmox node to start monitoring.</p><button class="btn btn-primary" style="margin-top:12px" onclick="openAddModal()">+ Add node</button></div>';renderTagChips(nodes);
   loadCharts();return}
   const col=document.getElementById('nodesCol');col.innerHTML='';
   nodes.forEach(n=>{const on=n.online==1;
   const ageSec = (()=>{try{const d=new Date((n.timestamp||'').includes('T')?n.timestamp: (n.timestamp||'').replace(' ','T')+'Z');return Math.floor((Date.now()-d.getTime())/1000)}catch(e){return 999}})();const ramPct=n.ram_total_gb?(n.ram_used_gb/n.ram_total_gb*100):0;
   const card=document.createElement('div');card.className='node-card'+(on?'':' offline')+(ageSec>60?' stale':'');
   // offline toast
-  if(prevOnline[n.node_name]===1 && !on) sendWebhook({event:'offline', node:n.node_name}); offlineAudio(); toast('⚠ '+n.node_name+' went offline', 6000);
-  if(prevOnline[n.node_name]===0 && on) sendWebhook({event:'online', node:n.node_name}); toast('✓ '+n.node_name+' back online');
+  if(prevOnline[n.node_name]===1 && !on) toast('⚠ '+n.node_name+' went offline', 6000);
+  if(prevOnline[n.node_name]===0 && on) toast('✓ '+n.node_name+' back online');
   prevOnline[n.node_name]=on?1:0;
   const fav=n.favorite?'★':'☆';
   const seen=relTime(n.timestamp);
@@ -1331,7 +993,7 @@ async function load(){
   if(lcd&&lcd.lines){lcdPreview.textContent=(lcd.lines[0]||'').padEnd(16)+'\n'+(lcd.lines[1]||'').padEnd(16);lcdMode.textContent=lcd.mode||'PAGES';
   if(lcd.alerting){alertStatus.textContent='⚠ Threshold exceeded';alertStatus.classList.add('active')}else{alertStatus.textContent='Quiet. Thresholds fire on the LCD and buzzer.';alertStatus.classList.remove('active')}}
   else if(nodes.length){const n=nodes[0];lcdPreview.textContent=`CPU: ${(n.cpu_usage||0).toFixed(1)}%    \nRAM: ${(n.ram_used_gb||0).toFixed(1)}/${(n.ram_total_gb||0).toFixed(1)}G`}
-  renderBigStats(nodes); renderTagChips(nodes);
+  renderTagChips(nodes);
   loadCharts();
 }
 
@@ -1366,17 +1028,8 @@ async function exportGraphsPng() {
 
 function changeRange() {
   graphRange = document.getElementById('graphRange').value;
-  await renderBigStats(nodes); renderTagChips(nodes);
+  await renderTagChips(nodes);
   loadCharts();
-}
-
-
-function showMinMax(logs, key, elId) {
-  if (!settings || settings.show_minmax === false) return;
-  const vals = logs.map(x => x[key]).filter(v => v != null);
-  if (!vals.length) return;
-  const mn = Math.min(...vals), mx = Math.max(...vals), avg = vals.reduce((a,b)=>a+b,0)/vals.length;
-  // append small text if container exists
 }
 
 async function loadCharts() {
@@ -1390,24 +1043,6 @@ async function loadCharts() {
   charts.net.update('none');
   charts.disk.data.labels = times; charts.disk.data.datasets[0].data = logs.map(x => x.disk_pct || 0); charts.disk.update('none');
 }
-
-
-async function openAlertHistory() {
-  const list = document.getElementById('alertHistoryList');
-  list.innerHTML = 'Loading…';
-  document.getElementById('alertHistoryModal').classList.add('open');
-  const alerts = await fetch('/api/alerts?limit=50').then(r=>r.json());
-  if (!alerts.length) { list.innerHTML = '<div style="opacity:.6">No alerts yet</div>'; return; }
-  list.innerHTML = alerts.map(a =>
-    `<div style="padding:6px 0;border-bottom:1px solid var(--border);${a.acknowledged?'opacity:.5':''}">
-      <b>${a.node_name||'?'}</b> · ${a.alert_type||''}<br>
-      <span style="opacity:.75">${a.message||''}</span><br>
-      <span style="font-size:.72rem;opacity:.5">${a.timestamp||''}</span>
-      ${a.acknowledged?'':' <a href="#" onclick="ackOne('+a.id+');openAlertHistory();return false" style="color:var(--accent)">ack</a>'}
-    </div>`
-  ).join('');
-}
-function closeAlertHistory(){document.getElementById('alertHistoryModal').classList.remove('open')}
 
 async function loadAlerts() {
   const list = document.getElementById('alertList');
@@ -1451,47 +1086,6 @@ async function toggleFav(name, cur) {
   load();
 }
 
-
-function applyThemePack(name) {
-  document.body.classList.remove('theme-cyberpunk','theme-terminal','theme-nord');
-  if (name && name !== 'default') document.body.classList.add('theme-' + name);
-}
-function applyLayoutPreset(name) {
-  document.body.classList.remove('layout-work','layout-night','layout-minimal');
-  document.body.classList.add('layout-' + (name || 'work'));
-  // minimal hides side cards
-  const side = document.querySelector('.side');
-  if (side) side.style.display = name === 'minimal' ? 'none' : '';
-}
-function toggleCinema() {
-  document.body.classList.toggle('cinema');
-  toast(document.body.classList.contains('cinema') ? 'Cinema mode' : 'Normal');
-}
-
-
-async function copyDiagnostics() {
-  const [health, settings] = await Promise.all([
-    fetch('/api/health').then(r=>r.json()).catch(()=>({})),
-    fetch('/api/settings').then(r=>r.json()).catch(()=>({}))
-  ]);
-  const safe = {...settings};
-  // already no passwords in /api/settings
-  const txt = JSON.stringify({health, settings: safe, ua: navigator.userAgent, ts: new Date().toISOString()}, null, 2);
-  await navigator.clipboard.writeText(txt);
-  toast('Diagnostics copied');
-}
-function showQr() {
-  const url = location.origin;
-  // simple QR via external API (no dependency)
-  const img = document.createElement('img');
-  img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(url);
-  img.alt = 'QR';
-  const box = document.getElementById('qrBox');
-  box.innerHTML = '';
-  box.appendChild(img);
-  document.getElementById('qrModal').classList.add('open');
-}
-
 function applyDensity(d) {
   document.body.classList.remove('density-compact','density-comfortable','density-dense');
   document.body.classList.add('density-' + (d || 'comfortable'));
@@ -1503,8 +1097,6 @@ document.addEventListener('keydown', (e) => {
   if (k === 'r') { e.preventDefault(); load(); toast('Refreshed'); }
   if (k === 's') { e.preventDefault(); openSettings(); }
   if (k === 'a') { e.preventDefault(); openAddModal(); }
-  if (k === 'c') { e.preventDefault(); toggleCinema(); }
-  if (k === 'u') { e.preventDefault(); undoDelete(); }
   if (k === 'escape') { closeSettings(); closeAddModal(); closeGraphEdit(); }
 });
 
@@ -1611,28 +1203,6 @@ let allNodesCache = [];
 
 
 let activeTag = null;
-
-function renderBigStats(nodes) {
-  const box = document.getElementById('bigStats');
-  if (!box) return;
-  const online = nodes.filter(n => n.online == 1);
-  const cpu = online.length ? (online.reduce((s,n)=>s+(n.cpu_usage||0),0)/online.length) : 0;
-  const ram = online.length ? (online.reduce((s,n)=>s+(n.ram_used_gb||0),0)) : 0;
-  box.innerHTML = `
-    <div class="card" style="flex:1;min-width:100px;text-align:center;padding:10px">
-      <div style="font-size:1.4rem;font-weight:700">${online.length}/${nodes.length}</div>
-      <div style="font-size:.7rem;opacity:.6">Online</div>
-    </div>
-    <div class="card" style="flex:1;min-width:100px;text-align:center;padding:10px">
-      <div style="font-size:1.4rem;font-weight:700">${cpu.toFixed(0)}%</div>
-      <div style="font-size:.7rem;opacity:.6">Avg CPU</div>
-    </div>
-    <div class="card" style="flex:1;min-width:100px;text-align:center;padding:10px">
-      <div style="font-size:1.4rem;font-weight:700">${ram.toFixed(1)}G</div>
-      <div style="font-size:.7rem;opacity:.6">RAM used</div>
-    </div>`;
-}
-
 function renderTagChips(nodes) {
   const box = document.getElementById('tagChips');
   if (!box) return;
@@ -1679,13 +1249,6 @@ function openDetail(n) {
   dRam.value = n.ram_alert != null ? n.ram_alert : '';
   dDisk.value = n.disk_alert != null ? n.disk_alert : '';
   detailModal.classList.add('open');
-  // quick guests button if not present
-  if (!document.getElementById('detailGuestsBtn')) {
-    const b = document.createElement('button'); b.id='detailGuestsBtn'; b.className='btn btn-ghost';
-    b.textContent='View Guests'; b.style.marginTop='8px';
-    b.onclick=()=>{closeDetail(); openGuests(detailName);};
-    detailModal.querySelector('.modal-box')?.appendChild(b);
-  }
   loadDetailCharts(n.node_name);
 }
 function closeDetail(){detailModal.classList.remove('open');detailName=null}
@@ -1704,37 +1267,6 @@ async function saveDetail() {
   });
   toast('Saved');
   closeDetail();
-  load();
-}
-
-
-async function openDiscover() {
-  toast('Scanning LAN for :8006 …');
-  const r = await fetch('/api/discover').then(x => x.json());
-  if (!r.ok) { toast(r.error || 'Scan failed'); return; }
-  if (!r.nodes.length) { toast('No Proxmox hosts found'); return; }
-  const list = r.nodes.map(n =>
-    `<label style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
-      <input type="checkbox" value="${n.ip}" data-name="${n.name}"> ${n.ip}
-    </label>`
-  ).join('');
-  const html = `<div id="discModal" class="modal open"><div class="modal-box" style="max-width:360px">
-    <h3>Discovered hosts</h3><div style="max-height:240px;overflow:auto">${list}</div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn btn-primary" onclick="importDiscovered()">Add selected</button>
-      <button class="btn btn-ghost" onclick="document.getElementById('discModal').remove()">Cancel</button>
-    </div></div></div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-}
-async function importDiscovered() {
-  const boxes = [...document.querySelectorAll('#discModal input:checked')];
-  if (!boxes.length) { toast('Select at least one'); return; }
-  const nodes = boxes.map(b => ({name: b.dataset.name, ip: b.value, node: 'pve', user: 'root@pam', password: ''}));
-  const r = await fetch('/api/nodes/import', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({nodes})});
-  const j = await r.json();
-  toast(j.ok ? ('Added ' + j.added) : (j.error || 'Failed'));
-  document.getElementById('discModal')?.remove();
   load();
 }
 
@@ -1788,48 +1320,5 @@ setInterval(()=>{loadAlerts();loadActivity();}, 15000);
   <button class="btn-shutdown" style="padding:6px 12px" onclick="quickPower('shutdown')">Shutdown</button>
   <button class="btn btn-ghost" style="padding:6px 10px" onclick="clearQuick()">Clear</button>
 </div>
-
-
-<div id="alertHistoryModal" class="modal">
-  <div class="modal-box" style="max-width:480px;max-height:80vh;overflow:auto">
-    <h3>Alert history</h3>
-    <div id="alertHistoryList" style="font-size:.85rem"></div>
-    <button class="btn btn-ghost" style="margin-top:12px" onclick="closeAlertHistory()">Close</button>
-  </div>
-</div>
-
-
-<div id="pinOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;
-  align-items:center;justify-content:center;flex-direction:column;gap:12px">
-  <div style="font-size:1.1rem;opacity:.8">Enter PIN</div>
-  <input id="pinInput" type="password" maxlength="8" style="font-size:1.4rem;text-align:center;width:140px;
-    padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:inherit"
-    onkeydown="if(event.key==='Enter')checkPin()">
-  <button class="btn btn-primary" onclick="checkPin()">Unlock</button>
-  <div id="pinErr" style="color:#f87171;font-size:.85rem;display:none">Wrong PIN</div>
-</div>
-
-
-<div style="text-align:center;padding:16px 8px 24px;opacity:.55;font-size:.75rem">
-  PVE Node Monitor <span id="verLabel">v1.9.0</span> ·
-  <a href="#" onclick="copyDiagnostics();return false" style="color:var(--accent)">Copy diagnostics</a> ·
-  <a href="#" onclick="showQr();return false" style="color:var(--accent)">QR</a>
-</div>
-<div id="qrModal" class="modal">
-  <div class="modal-box" style="text-align:center;max-width:280px">
-    <h3>Open on phone</h3>
-    <div id="qrBox" style="margin:12px auto"></div>
-    <button class="btn btn-ghost" onclick="document.getElementById('qrModal').classList.remove('open')">Close</button>
-  </div>
-</div>
-
-
-<nav id="bottomNav" style="display:none;position:fixed;bottom:0;left:0;right:0;background:var(--card);
-  border-top:1px solid var(--border);padding:8px 0;z-index:40;justify-content:space-around">
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="window.scrollTo(0,0)">Nodes</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openSettings()">Settings</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openAddModal()">Add</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="toggleCinema()">Cinema</button>
-</nav>
 
 </body></html>"""

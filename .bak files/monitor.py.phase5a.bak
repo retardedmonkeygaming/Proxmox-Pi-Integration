@@ -45,9 +45,7 @@ class NodeClient:
     def _c(self):
         return {"PVEAuthCookie": self.ticket or ""}
 
-    def get_stats(self):
-        self._top_cpu = -1
-        self._top_name = '—' -> Optional[Dict[str, Any]]:
+    def get_stats(self) -> Optional[Dict[str, Any]]:
         if not self.ticket and not self.authenticate():
             self.online = False
             return None
@@ -67,7 +65,6 @@ class NodeClient:
 
             d = r.json()["data"]
             cpu = round(float(d["cpu"]) * 100, 1)
-            load1 = round(float(d.get("loadavg", 0) or d.get("wait", 0) or 0), 2)
             ram_u = round(d["memory"]["used"] / 1024**3, 1)
             ram_t = round(d["memory"]["total"] / 1024**3, 1)
             disk = round((d["rootfs"]["used"] / d["rootfs"]["total"]) * 100, 1)
@@ -80,15 +77,7 @@ class NodeClient:
                     headers=self._h(), cookies=self._c(), timeout=5,
                 )
                 if rr.status_code == 200:
-                    guests = rr.json().get("data", [])
-                    active += sum(1 for g in guests if g.get("status") == "running")
-                    # track top by cpu
-                    for g in guests:
-                        if g.get("status") == "running":
-                            c = float(g.get("cpu", 0) or 0)
-                            if c > getattr(self, "_top_cpu", -1):
-                                self._top_cpu = c
-                                self._top_name = (g.get("name") or str(g.get("vmid")))[:14]
+                    active += sum(1 for g in rr.json().get("data", []) if g.get("status") == "running")
 
             net_in = net_out = 0.0
             try:
@@ -114,11 +103,9 @@ class NodeClient:
                 "node": self.node,
                 "type": self.ntype,
                 "cpu": cpu, "ram_used": ram_u, "ram_total": ram_t,
-                "load1": load1,
                 "disk_pct": disk, "active_vms": active,
                 "net_in": net_in, "net_out": net_out,
                 "uptime": uptime, "online": True,
-                "top_vm": getattr(self, "_top_name", "—"),
             }
         except Exception as e:
             log.debug("%s stats: %s", self.name, e)
@@ -144,7 +131,7 @@ class NodeClient:
         t0 = _t.time()
         ok = self.authenticate()
         ms = round((_t.time() - t0) * 1000)
-        return {"ok": ok, "message": "Connected" if ok else "Auth failed – check user/password/realm", "latency_ms": ms}
+        return {"ok": ok, "message": "Connected" if ok else "Auth failed", "latency_ms": ms}
 
     def list_guests(self):
         if not self.ticket and not self.authenticate():
