@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+requests>=2.31
+RPi.GPIO
+adafruit-circuitpython-charlcd
+adafruit-circuitpython-dht
