@@ -25,30 +25,24 @@ def fmt_uptime(secs: int) -> str:
 def main():
     cfg = config.load_config()
 
-    # ---------- First-boot decision ----------
-    if not cfg.get("setup_done"):
+    if not cfg.get("setup_done") or not cfg.get("nodes"):
         print("\n" + "=" * 50)
         print("  PVE Node Monitor – First Boot")
         print("=" * 50)
-        print("1) Terminal setup wizard")
-        print("2) WebUI setup wizard (recommended)")
+        print("1) Terminal setup")
+        print("2) WebUI setup (recommended)")
         choice = input("Choose [1/2]: ").strip() or "2"
 
         if choice == "1":
             cfg = config.run_terminal_wizard()
         else:
-            # Start temporary web server for setup
-            print("\nStarting temporary WebUI setup on port 8000...")
-            print("Open http://<pi-ip>:8000/setup in your browser")
-            def run_setup_web():
+            print("\nOpen http://<pi-ip>:8000/setup in your browser")
+            def run_setup():
                 uvicorn.run(fastapi_app, host="0.0.0.0", port=8000, log_level="warning")
-            t = threading.Thread(target=run_setup_web, daemon=True)
-            t.start()
-            # Wait until setup is marked done
+            threading.Thread(target=run_setup, daemon=True).start()
             while not config.load_config().get("setup_done"):
                 time.sleep(1)
             cfg = config.load_config()
-            print("Setup completed via WebUI. Continuing...")
 
     log = setup_logging(cfg.get("log_level", "INFO"))
     log.info("=== PVE Node Monitor starting ===")
@@ -61,9 +55,8 @@ def main():
     )
     pve = ProxmoxManager(cfg["nodes"])
 
-    # Shared state
     all_metrics: List[Dict[str, Any]] = []
-    current_idx = cfg.get("default_node_idx", 0)
+    current_idx = min(cfg.get("default_node_idx", 0), max(0, len(cfg["nodes"]) - 1))
     humidity = None
     stop = threading.Event()
 
@@ -80,7 +73,7 @@ def main():
                         s["active_vms"], 1 if s["online"] else 0
                     )
                 except Exception as e:
-                    log.error("DB write: %s", e)
+                    log.error("DB: %s", e)
             stop.wait(cfg["log_interval"])
 
     def env_worker():
@@ -98,15 +91,13 @@ def main():
     threading.Thread(target=poller, daemon=True).start()
     threading.Thread(target=env_worker, daemon=True).start()
 
-    # Permanent web UI
     def run_web():
         uvicorn.run(fastapi_app, host="0.0.0.0", port=8000, log_level="warning", access_log=False)
     threading.Thread(target=run_web, daemon=True).start()
     log.info("Web UI → http://0.0.0.0:8000")
 
-    # LCD state
     page = 0
-    TOTAL_PAGES = 4
+    TOTAL = 4
     in_settings = False
     settings_idx = 0
     last_flash = time.time()
@@ -122,7 +113,6 @@ def main():
             if in_settings and now - last_activity > 15:
                 in_settings = False
 
-            # Gestures
             if g == "DOUBLE" and not in_settings:
                 in_settings = True
                 settings_idx = 0
@@ -151,13 +141,12 @@ def main():
                     config.save_config(cfg)
                     hw.beep(0.07)
             elif g == "SINGLE":
-                page = (page + 1) % TOTAL_PAGES
+                page = (page + 1) % TOTAL
             elif g == "HOLD" and not in_settings:
-                # Long hold cycles node
                 current_idx = (current_idx + 1) % max(1, len(all_metrics))
                 hw.beep(0.05, 2)
 
-            # Render
+            # ----- RENDER -----
             if in_settings:
                 labels = [
                     ("Log Interval", f"> {cfg['log_interval']}s"),
@@ -169,36 +158,37 @@ def main():
                 title, val = labels[settings_idx]
                 hw.display(f"SET {title[:12]}", f"{val:<16}")
             else:
-                # Node name flash
+                # Smooth node-name flash
                 if now - last_flash >= cfg.get("flash_interval", 10):
                     flash_active = True
                     last_flash = now
-                if flash_active and now - last_flash <= cfg.get("flash_duration", 2):
-                    name = metrics.get("name", "?")[:14]
-                    hw.display("     NODE:     ", f"[{name.center(14)}]")
+
+                if flash_active and (now - last_flash) <= cfg.get("flash_duration", 2.2):
+                    name = (metrics.get("name") or "?")[:14]
+                    hw.force_display("     NODE:     ", f"[{name.center(14)}]")
                 else:
                     flash_active = False
-            if not metrics.get("online"):
-                hw.display(" System Offline", f"{metrics.get('name','')[:16]:^16}")
-            else:
-                if page == 0:
-                    hw.display(
-                        f"CPU: {metrics['cpu']:5.1f}%    ",
-                        f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G"
-                    )
-                elif page == 1:
-                    hw.display(
-                        f"Disk: {metrics['disk_pct']:5.1f}%   ",
-                        f"VMs:  {metrics['active_vms']:3d}      "
-                    )
-                elif page == 2:
-                    up = fmt_rate(metrics["net_out"])
-                    dn = fmt_rate(metrics["net_in"])
-                    hw.display(f"Up:  {up}     ", f"Dn:  {dn}     ")
-                else:
-                    uptime = fmt_uptime(metrics.get("uptime", 0))
-                    hum = f"{humidity:.0f}%" if humidity is not None else "--%"
-                    hw.display(f"Up:  {uptime:<6}    ", f"Hum: {hum:<6}    ")
+                    if not metrics.get("online"):
+                        hw.display(" System Offline", f"{(metrics.get('name') or '')[:16]:^16}")
+                    else:
+                        if page == 0:
+                            hw.display(
+                                f"CPU: {metrics['cpu']:5.1f}%    ",
+                                f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G"
+                            )
+                        elif page == 1:
+                            hw.display(
+                                f"Disk: {metrics['disk_pct']:5.1f}%   ",
+                                f"VMs:  {metrics['active_vms']:3d}      "
+                            )
+                        elif page == 2:
+                            up = fmt_rate(metrics["net_out"])
+                            dn = fmt_rate(metrics["net_in"])
+                            hw.display(f"Up:  {up}     ", f"Dn:  {dn}     ")
+                        else:
+                            uptime = fmt_uptime(metrics.get("uptime", 0))
+                            hum = f"{humidity:.0f}%" if humidity is not None else "--%"
+                            hw.display(f"Up:  {uptime:<6}    ", f"Hum: {hum:<6}    ")
 
             time.sleep(0.035)
     except KeyboardInterrupt:

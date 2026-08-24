@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 CONFIG_FILE = "config.json"
 
 DEFAULT_NODE = {
-    "name": "pve",
+    "name": "Precision",
     "ip": "",
     "node": "pve",
     "user": "root@pam",
@@ -13,14 +13,14 @@ DEFAULT_NODE = {
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "nodes": [DEFAULT_NODE.copy()],
+    "nodes": [],
     "log_interval": 10,
     "dht_interval": 30,
     "hold_time": 0.5,
     "multi_tap_window": 0.45,
     "buzzer_enabled": True,
     "flash_interval": 10,
-    "flash_duration": 2,
+    "flash_duration": 2.2,
     "default_node_idx": 0,
     "log_level": "INFO",
     "quiet_mode": False,
@@ -33,7 +33,7 @@ def load_config() -> Dict[str, Any]:
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    # Migrate old single-node format
+    # Migrate very old single-node format
     if "pve_ip" in cfg and "nodes" not in cfg:
         cfg["nodes"] = [{
             "name": cfg.get("pve_node", "pve"),
@@ -56,25 +56,25 @@ def save_config(cfg: Dict[str, Any]) -> None:
 
 def run_terminal_wizard() -> Dict[str, Any]:
     print("=" * 56)
-    print("   PVE Node Monitor – Terminal Setup Wizard")
+    print("   PVE Node Monitor – Terminal Setup")
     print("=" * 56)
     cfg = DEFAULT_CONFIG.copy()
     nodes: List[Dict] = []
 
     while True:
-        print(f"\n--- Node #{len(nodes)+1} ---")
+        print(f"\n--- Node / Server #{len(nodes)+1} ---")
         n = DEFAULT_NODE.copy()
-        n["name"] = input("Friendly name [pve]: ").strip() or "pve"
-        n["ip"] = input("Proxmox IP / Hostname: ").strip()
-        n["node"] = input(f"Node name [{n['name']}]: ").strip() or n["name"]
+        n["name"] = input("Friendly name [Precision]: ").strip() or "Precision"
+        n["ip"] = input("IP / Hostname: ").strip()
+        n["node"] = input(f"Proxmox node name [{n['name']}]: ").strip() or n["name"]
         n["user"] = input("User [root@pam]: ").strip() or "root@pam"
         n["password"] = input("Password: ").strip()
         nodes.append(n)
-        if input("Add another node? [y/N]: ").strip().lower() != "y":
+        if input("Add another? [y/N]: ").strip().lower() != "y":
             break
 
     cfg["nodes"] = nodes
     cfg["setup_done"] = True
     save_config(cfg)
-    print("\n[✓] Configuration saved.\n")
+    print("\n[✓] Saved.\n")
     return cfg

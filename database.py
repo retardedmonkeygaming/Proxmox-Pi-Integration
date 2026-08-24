@@ -29,14 +29,10 @@ def init_db() -> None:
             humidity REAL
         )
     """)
-    # Safe migrations
     for col, typ in [
-        ("node_name", "TEXT"),
-        ("disk_pct", "REAL"),
-        ("net_in_kbps", "REAL"),
-        ("net_out_kbps", "REAL"),
-        ("active_vms", "INTEGER"),
-        ("online", "INTEGER"),
+        ("node_name", "TEXT"), ("disk_pct", "REAL"),
+        ("net_in_kbps", "REAL"), ("net_out_kbps", "REAL"),
+        ("active_vms", "INTEGER"), ("online", "INTEGER"),
     ]:
         try:
             cur.execute(f"ALTER TABLE server_logs ADD COLUMN {col} {typ}")
@@ -45,7 +41,7 @@ def init_db() -> None:
     conn.commit()
     conn.close()
 
-def log_server_metrics(node_name: str, cpu, ram_u, ram_t, disk, net_in, net_out, vms, online=1):
+def log_server_metrics(node_name, cpu, ram_u, ram_t, disk, net_in, net_out, vms, online=1):
     conn = sqlite3.connect(DB_FILE, timeout=15)
     cur = conn.cursor()
     cur.execute("""

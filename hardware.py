@@ -1,5 +1,5 @@
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 import RPi.GPIO as GPIO
 import board
@@ -43,7 +43,7 @@ class HardwareManager:
             GPIO.output(BUZZER_PIN, GPIO.HIGH)
             time.sleep(duration)
             GPIO.output(BUZZER_PIN, GPIO.LOW)
-            time.sleep(0.05)
+            time.sleep(0.06)
 
     def display(self, line1: str, line2: str = ""):
         l1 = f"{(line1 or '')[:16]:<16}"
@@ -53,6 +53,14 @@ class HardwareManager:
             self.lcd.message = f"{l1}\n{l2}"
             self._last1, self._last2 = l1, l2
 
+    def force_display(self, line1: str, line2: str = ""):
+        """Force update even if content is the same (used for flash)."""
+        l1 = f"{(line1 or '')[:16]:<16}"
+        l2 = f"{(line2 or '')[:16]:<16}"
+        self.lcd.cursor_position(0, 0)
+        self.lcd.message = f"{l1}\n{l2}"
+        self._last1, self._last2 = l1, l2
+
     def read_gesture(self) -> Optional[str]:
         if GPIO.input(TOUCH_PIN) != GPIO.HIGH:
             return None
@@ -60,7 +68,7 @@ class HardwareManager:
         while GPIO.input(TOUCH_PIN) == GPIO.HIGH:
             time.sleep(0.012)
             if time.time() - start >= self.hold_time:
-                self.beep(0.12)
+                self.beep(0.11)
                 while GPIO.input(TOUCH_PIN) == GPIO.HIGH:
                     time.sleep(0.012)
                 return "HOLD"

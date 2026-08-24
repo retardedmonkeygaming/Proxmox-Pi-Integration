@@ -6,7 +6,7 @@ import requests
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-log = logging.getLogger("pve_node_monitor.monitor")
+log = logging.getLogger("pve_node_monitor")
 
 class NodeClient:
     def __init__(self, name: str, ip: str, node: str, user: str, password: str):
@@ -35,7 +35,7 @@ class NodeClient:
                 self.csrf = d["CSRFPreventionToken"]
                 return True
         except Exception as e:
-            log.debug("%s auth error: %s", self.name, e)
+            log.debug("%s auth: %s", self.name, e)
         return False
 
     def _h(self):
@@ -59,7 +59,6 @@ class NodeClient:
                 self.online = False
                 return None
             if r.status_code != 200:
-                log.warning("%s status HTTP %s", self.name, r.status_code)
                 self.online = False
                 return None
 
@@ -105,12 +104,11 @@ class NodeClient:
                 "uptime": uptime, "online": True,
             }
         except Exception as e:
-            log.debug("%s get_stats: %s", self.name, e)
+            log.debug("%s stats: %s", self.name, e)
             self.online = False
             return None
 
     def power(self, action: str) -> bool:
-        """action = 'shutdown' or 'reboot'"""
         if not self.ticket and not self.authenticate():
             return False
         try:
@@ -121,7 +119,7 @@ class NodeClient:
             )
             return r.status_code in (200, 202)
         except Exception as e:
-            log.error("Power %s failed: %s", action, e)
+            log.error("Power %s: %s", action, e)
             return False
 
 
