@@ -441,7 +441,7 @@ async def setup_pins_submit(request: Request):
     cfg["has_touch"] = form.get("has_touch") == "on"
     cfg["has_active_buzzer"] = form.get("has_active_buzzer") == "on"
     cfg["has_passive_buzzer"] = form.get("has_passive_buzzer") == "on"
-        cfg["buzzer_enabled"] = cfg["has_active_buzzer"]
+    cfg["buzzer_enabled"] = cfg["has_active_buzzer"]
     cfg["passive_buzzer_enabled"] = cfg["has_passive_buzzer"]
     # standalone if nothing selected
     any_hw = any([cfg["has_lcd"], cfg["has_touch"], cfg["has_active_buzzer"],
