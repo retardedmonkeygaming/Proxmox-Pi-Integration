@@ -1,13 +1,18 @@
 import time
 import threading
 from typing import Any, Dict
-import uvicorn
-from app import app as fastapi_app
 
-from . import config, database
-from .hardware import HardwareManager
-from .monitor import ProxmoxMonitor
-from .logging_setup import setup_logging
+import config
+import database
+from hardware import HardwareManager
+from monitor import ProxmoxMonitor
+from logging_setup import setup_logging
+
+# Web UI
+try:
+    from app import app as fastapi_app
+except ImportError:
+    fastapi_app = Noneg
 
 def fmt_rate(kbps: float) -> str:
     if kbps >= 1024:
