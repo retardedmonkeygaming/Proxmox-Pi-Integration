@@ -10,17 +10,14 @@ def _get_board_map():
     if _BOARD_MAP is None:
         import board
         _BOARD_MAP = {
-            4: board.D4, 17: board.D17, 18: board.D18, 22: board.D22,
-            23: board.D23, 24: board.D24, 25: board.D25, 27: board.D27,
-            5: board.D5, 6: board.D6, 12: board.D12, 13: board.D13,
-            16: board.D16, 19: board.D19, 20: board.D20, 21: board.D21,
-            26: board.D26,
+            4: board.D4, 5: board.D5, 6: board.D6, 12: board.D12, 13: board.D13,
+            16: board.D16, 17: board.D17, 18: board.D18, 19: board.D19, 20: board.D20,
+            21: board.D21, 22: board.D22, 23: board.D23, 24: board.D24, 25: board.D25,
+            26: board.D26, 27: board.D27,
         }
     return _BOARD_MAP
 
 class HardwareManager:
-    """Gracefully degrades when components are missing or standalone=True."""
-
     def __init__(self, cfg: Dict[str, Any]):
         self.cfg = cfg
         self.standalone = cfg.get("standalone", False)
@@ -30,16 +27,13 @@ class HardwareManager:
         self.passive_buzzer_enabled = cfg.get("passive_buzzer_enabled", True) and cfg.get("has_passive_buzzer", True)
         self.alert_silenced = False
         self._last1 = self._last2 = ""
-        self._last_hum: Optional[float] = None
         self.lcd = None
-        self.dht = None
         self.TOUCH_PIN = cfg.get("gpio_touch", 27)
         self.ACTIVE_BUZZER_PIN = cfg.get("gpio_active_buzzer", 6)
         self.PASSIVE_BUZZER_PIN = cfg.get("gpio_passive_buzzer", 16)
 
         if self.standalone:
             return
-
         try:
             GPIO.setmode(GPIO.BCM)
         except Exception:
@@ -69,34 +63,21 @@ class HardwareManager:
         if cfg.get("has_lcd", True):
             self._init_lcd(cfg)
 
-        if cfg.get("has_dht", True):
-            try:
-                import board
-                import adafruit_dht
-                dht_n = cfg.get("gpio_dht", 4)
-                self.dht = adafruit_dht.DHT11(_get_board_map().get(dht_n, board.D4))
-            except Exception:
-                self.dht = None
-
     def _init_lcd(self, cfg):
         try:
             import digitalio
             import adafruit_character_lcd.character_lcd as character_lcd
             mode = cfg.get("lcd_mode", "parallel")
             if mode == "i2c":
-                # I2C backpack (PCF8574 style) – 4 pins effectively
                 try:
-                    import board
-                    import busio
+                    import board, busio
                     from adafruit_character_lcd.character_lcd_i2c import Character_LCD_I2C
                     i2c = busio.I2C(board.SCL, board.SDA)
                     addr = int(str(cfg.get("lcd_i2c_addr", "0x27")), 0)
                     self.lcd = Character_LCD_I2C(i2c, 16, 2, address=addr)
                 except Exception:
-                    # fallback note – user may need different library
                     self.lcd = None
             else:
-                # classic 4-bit parallel
                 bm = _get_board_map()
                 rs = digitalio.DigitalInOut(bm.get(cfg.get("lcd_rs", 22)))
                 en = digitalio.DigitalInOut(bm.get(cfg.get("lcd_en", 17)))
@@ -116,35 +97,47 @@ class HardwareManager:
                 GPIO.output(self.ACTIVE_BUZZER_PIN, GPIO.HIGH)
                 time.sleep(duration)
                 GPIO.output(self.ACTIVE_BUZZER_PIN, GPIO.LOW)
-                time.sleep(0.06)
+                time.sleep(0.05)
         except Exception:
             pass
 
-    def alert_tone(self, pattern="error"):
-        if not self.passive_buzzer_enabled or self.alert_silenced or self.standalone:
+    def _tone(self, freq_approx_ms, duration):
+        """Software square-wave on passive pin for a more audible tone."""
+        if not self.passive_buzzer_enabled or self.standalone:
             return
         try:
-            for d in (0.12, 0.08, 0.28, 0.08, 0.12):
+            half = max(0.001, freq_approx_ms / 2000.0)
+            end = time.time() + duration
+            while time.time() < end:
                 GPIO.output(self.PASSIVE_BUZZER_PIN, GPIO.HIGH)
-                time.sleep(d)
+                time.sleep(half)
                 GPIO.output(self.PASSIVE_BUZZER_PIN, GPIO.LOW)
-                time.sleep(0.07)
+                time.sleep(half)
         except Exception:
             pass
 
+    def alert_tone(self):
+        """Clear 3-beep alarm pattern (not just clicks)."""
+        if not self.passive_buzzer_enabled or self.alert_silenced or self.standalone:
+            return
+        # three rising tones
+        for ms in (3.0, 2.2, 1.6):
+            self._tone(ms, 0.18)
+            time.sleep(0.08)
+        time.sleep(0.15)
+        self._tone(2.0, 0.35)
+
     def test_beep(self):
-        self.beep(0.06, 2)
-        if self.passive_buzzer_enabled:
-            time.sleep(0.15)
-            self.alert_tone()
+        self.beep(0.05, 2)
+        time.sleep(0.2)
+        self.alert_tone()
 
     def display(self, line1: str, line2: str = ""):
-        if not self.lcd:
-            self._last1 = f"{(line1 or '')[:16]:<16}"
-            self._last2 = f"{(line2 or '')[:16]:<16}"
-            return
         l1 = f"{(line1 or '')[:16]:<16}"
         l2 = f"{(line2 or '')[:16]:<16}"
+        if not self.lcd:
+            self._last1, self._last2 = l1, l2
+            return
         if l1 != self._last1 or l2 != self._last2:
             try:
                 self.lcd.cursor_position(0, 0)
@@ -154,12 +147,11 @@ class HardwareManager:
             self._last1, self._last2 = l1, l2
 
     def force_display(self, line1: str, line2: str = ""):
-        if not self.lcd:
-            self._last1 = f"{(line1 or '')[:16]:<16}"
-            self._last2 = f"{(line2 or '')[:16]:<16}"
-            return
         l1 = f"{(line1 or '')[:16]:<16}"
         l2 = f"{(line2 or '')[:16]:<16}"
+        if not self.lcd:
+            self._last1, self._last2 = l1, l2
+            return
         try:
             self.lcd.cursor_position(0, 0)
             self.lcd.message = f"{l1}\n{l2}"
@@ -199,18 +191,6 @@ class HardwareManager:
             return "TRIPLE" if count >= 3 else "DOUBLE" if count == 2 else "SINGLE"
         except Exception:
             return None
-
-    def read_humidity(self) -> Optional[float]:
-        if not self.dht:
-            return self._last_hum
-        try:
-            h = self.dht.humidity
-            if h is not None:
-                self._last_hum = h
-                return h
-        except Exception:
-            pass
-        return self._last_hum
 
     def cleanup(self):
         try:

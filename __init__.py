@@ -1,2 +1,2 @@
-__version__ = "1.3.1"
+__version__ = "1.6.0"
 __project__ = "PVE Node Monitor"

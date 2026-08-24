@@ -120,8 +120,9 @@ async def api_test_connection(request: Request):
 def api_get_settings():
     cfg = config.load_config()
     keys = ["buzzer_enabled","passive_buzzer_enabled","quiet_mode","compact_cards","flash_hostname",
-            "log_interval","dht_interval","cpu_alert","disk_alert","ram_alert","theme","graph_visible",
-            "auto_refresh","standalone","has_lcd","has_touch","has_active_buzzer","has_passive_buzzer","has_dht"]
+            "log_interval","cpu_alert","disk_alert","ram_alert","theme","graph_visible",
+            "auto_refresh","standalone","has_lcd","has_touch","has_active_buzzer","has_passive_buzzer",
+            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval"]
     return {k: cfg.get(k) for k in keys}
 
 @app.post("/api/settings")
@@ -221,14 +222,13 @@ async def setup_pins_submit(request: Request):
     cfg["has_touch"] = form.get("has_touch") == "on"
     cfg["has_active_buzzer"] = form.get("has_active_buzzer") == "on"
     cfg["has_passive_buzzer"] = form.get("has_passive_buzzer") == "on"
-    cfg["has_dht"] = form.get("has_dht") == "on"
     cfg["buzzer_enabled"] = cfg["has_active_buzzer"]
     cfg["passive_buzzer_enabled"] = cfg["has_passive_buzzer"]
     # standalone if nothing selected
     any_hw = any([cfg["has_lcd"], cfg["has_touch"], cfg["has_active_buzzer"],
-                  cfg["has_passive_buzzer"], cfg["has_dht"]])
+                  cfg["has_passive_buzzer"]])
     cfg["standalone"] = not any_hw or form.get("standalone") == "on"
-    for k in ("gpio_touch","gpio_active_buzzer","gpio_passive_buzzer","gpio_dht",
+    for k in ("gpio_touch","gpio_active_buzzer","gpio_passive_buzzer",
               "lcd_rs","lcd_en","lcd_d4","lcd_d5","lcd_d6","lcd_d7"):
         try: cfg[k] = int(form.get(k, cfg.get(k, 0)))
         except: pass
@@ -312,37 +312,32 @@ input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(
 .section{margin-top:18px}.section h3{font-size:.95rem;margin-bottom:8px}
 .pin-fields{display:none}.pin-fields.show{display:block}
 .hint{font-size:.75rem;color:var(--muted);margin-top:4px}
+.dim{opacity:.35;pointer-events:none;filter:grayscale(1)}
 </style></head><body>
 <div class="card">
 <h1>Pin Layout</h1>
-<p class="sub">Step 2 · Choose installed components & GPIO pins</p>
+<p class="sub">Step 2 · Components & GPIO pins</p>
 <form method="post" action="/setup/pins">
 <div class="check-row"><input type="checkbox" name="standalone" id="standalone" onchange="togStand()"><label for="standalone">Standalone web UI only (no hardware)</label></div>
 <div id="hwSection">
 <div class="section"><h3>Components installed</h3>
-<div class="check-row"><input type="checkbox" name="has_lcd" id="has_lcd" checked onchange="togLCD()"><label for="has_lcd">1602 LCD</label></div>
-<div class="check-row"><input type="checkbox" name="has_touch" id="has_touch" checked><label for="has_touch">Touch sensor</label></div>
-<div class="check-row"><input type="checkbox" name="has_active_buzzer" id="has_active_buzzer" checked><label for="has_active_buzzer">Active buzzer (clicks)</label></div>
-<div class="check-row"><input type="checkbox" name="has_passive_buzzer" id="has_passive_buzzer" checked><label for="has_passive_buzzer">Passive buzzer (alert tones)</label></div>
-<div class="check-row"><input type="checkbox" name="has_dht" id="has_dht" checked><label for="has_dht">DHT humidity sensor</label></div>
+<div class="check-row"><input type="checkbox" name="has_lcd" id="has_lcd" checked onchange="sync()"><label for="has_lcd">1602 LCD</label></div>
+<div class="check-row"><input type="checkbox" name="has_touch" id="has_touch" checked onchange="sync()"><label for="has_touch">Touch sensor</label></div>
+<div class="check-row"><input type="checkbox" name="has_active_buzzer" id="has_active_buzzer" checked onchange="sync()"><label for="has_active_buzzer">Active buzzer (clicks)</label></div>
+<div class="check-row"><input type="checkbox" name="has_passive_buzzer" id="has_passive_buzzer" checked onchange="sync()"><label for="has_passive_buzzer">Passive buzzer (alert tones)</label></div>
 </div>
 <div class="section" id="gpioSection"><h3>GPIO pins (BCM)</h3>
-<div class="row">
-<div><label>Touch</label><input name="gpio_touch" type="number" value="27"></div>
-<div><label>Active buzzer</label><input name="gpio_active_buzzer" type="number" value="6"></div>
-</div>
-<div class="row">
-<div><label>Passive buzzer</label><input name="gpio_passive_buzzer" type="number" value="16"></div>
-<div><label>DHT</label><input name="gpio_dht" type="number" value="4"></div>
-</div>
+<div class="row" id="rowTouch"><div><label>Touch</label><input name="gpio_touch" type="number" value="27"></div>
+<div id="rowAct"><label>Active buzzer</label><input name="gpio_active_buzzer" type="number" value="6"></div></div>
+<div class="row" id="rowPas"><div><label>Passive buzzer</label><input name="gpio_passive_buzzer" type="number" value="16"></div><div></div></div>
 </div>
 <div class="section" id="lcdSection"><h3>LCD connection</h3>
 <label>Mode</label>
 <select name="lcd_mode" id="lcd_mode" onchange="togMode()">
 <option value="parallel" selected>Parallel 4-bit (RS/EN/D4-D7)</option>
-<option value="i2c">I2C backpack (reduces to 4 pins)</option>
+<option value="i2c">I2C backpack (4 pins)</option>
 </select>
-<div class="hint">I2C backpack = PCF8574-style module that turns 16 pins into SDA/SCL + power</div>
+<div class="hint">I2C backpack = PCF8574-style module</div>
 <div id="parallelBox" class="pin-fields show">
 <div class="row" style="margin-top:10px">
 <div><label>RS</label><input name="lcd_rs" type="number" value="22"></div>
@@ -360,24 +355,26 @@ input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(
 <div id="i2cBox" class="pin-fields">
 <label style="margin-top:10px">I2C address</label>
 <input name="lcd_i2c_addr" value="0x27">
-<div class="hint">Common addresses: 0x27 or 0x3F</div>
+<div class="hint">Common: 0x27 or 0x3F</div>
 </div>
 </div>
 </div>
 <button class="btn" type="submit">Save & Start</button>
 </form></div>
 <script>
-function togStand(){
-  const s=standalone.checked;
-  hwSection.style.opacity=s?.4:1;
-  hwSection.style.pointerEvents=s?'none':'auto';
+function togStand(){const s=standalone.checked;hwSection.classList.toggle('dim',s)}
+function sync(){
+  lcdSection.classList.toggle('dim',!has_lcd.checked);
+  rowTouch.classList.toggle('dim',!has_touch.checked);
+  rowAct.classList.toggle('dim',!has_active_buzzer.checked);
+  rowPas.classList.toggle('dim',!has_passive_buzzer.checked);
 }
-function togLCD(){lcdSection.style.display=has_lcd.checked?'block':'none'}
 function togMode(){
   const i2c=lcd_mode.value==='i2c';
   parallelBox.classList.toggle('show',!i2c);
   i2cBox.classList.toggle('show',i2c);
 }
+sync();
 </script></body></html>"""
 
 # Dashboard – reuse previous polished version (abbreviated key parts, full in file)
@@ -477,18 +474,22 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   </div>
 </div>
 <footer>Insta: <a href="https://instagram.com/vxprxx" target="_blank">vxprxx</a> · GitHub: <a href="https://github.com/retardedmonkeygaming" target="_blank">retardedmonkeygaming</a>
-<br><span style="font-size:.68rem;opacity:.65">PVE Node Monitor · v1.5</span></footer>
+<br><span style="font-size:.68rem;opacity:.65">PVE Node Monitor · v1.6</span></footer>
 
 <div class="drawer-bg" id="drawerBg" onclick="closeSettings()"></div>
 <div class="drawer" id="drawer">
   <h2>Settings <button class="close-btn" onclick="closeSettings()">✕</button></h2>
-  <div class="set-row"><div><label>Active buzzer</label><div class="hint">Clicks</div></div><button class="toggle" id="tBuzzer" onclick="toggleSet(this,'buzzer_enabled')"></button></div>
+  <div class="set-row"><div><label>Active buzzer</label><div class="hint">GPIO clicks</div></div><button class="toggle" id="tBuzzer" onclick="toggleSet(this,'buzzer_enabled')"></button></div>
   <div class="set-row"><div><label>Passive buzzer</label><div class="hint">Alert tones</div></div><button class="toggle" id="tPassive" onclick="toggleSet(this,'passive_buzzer_enabled')"></button></div>
-  <div class="set-row"><div><label>Quiet mode</label><div class="hint">Mute alerts</div></div><button class="toggle" id="tQuiet" onclick="toggleSet(this,'quiet_mode')"></button></div>
-  <div class="set-row"><div><label>Hostname flash</label></div><button class="toggle" id="tFlash" onclick="toggleSet(this,'flash_hostname')"></button></div>
-  <div class="set-row"><div><label>Compact cards</label></div><button class="toggle" id="tCompact" onclick="toggleSet(this,'compact_cards')"></button></div>
+  <div class="set-row"><div><label>Quiet mode</label><div class="hint">Mute all alert tones</div></div><button class="toggle" id="tQuiet" onclick="toggleSet(this,'quiet_mode')"></button></div>
+  <div class="set-row"><div><label>Hostname flash</label><div class="hint">Show node name on LCD</div></div><button class="toggle" id="tFlash" onclick="toggleSet(this,'flash_hostname')"></button></div>
+  <div class="set-row"><div><label>Compact cards</label><div class="hint">Denser node cards</div></div><button class="toggle" id="tCompact" onclick="toggleSet(this,'compact_cards')"></button></div>
+  <div class="set-row"><div><label>Show net on card</label></div><button class="toggle" id="tNet" onclick="toggleSet(this,'show_net_on_card')"></button></div>
+  <div class="set-row"><div><label>Confirm power actions</label></div><button class="toggle" id="tConfirm" onclick="toggleSet(this,'confirm_power')"></button></div>
   <div class="set-group"><label>Log interval (s)</label><input class="set-input" type="number" id="sLog" min="5" max="120"></div>
-  <div class="set-group"><label>Auto-refresh (s)</label><input class="set-input" type="number" id="sRefresh" min="3" max="30"></div>
+  <div class="set-group"><label>Auto-refresh UI (s)</label><input class="set-input" type="number" id="sRefresh" min="3" max="30"></div>
+  <div class="set-group"><label>Hostname flash interval (s)</label><input class="set-input" type="number" id="sFlashInt" min="5" max="60"></div>
+  <div class="set-group"><label>Alert repeat (s)</label><input class="set-input" type="number" id="sAlertRep" min="5" max="120"></div>
   <div class="set-group"><label>CPU alert %</label><input class="set-input" type="number" id="sCpu" min="1" max="100"></div>
   <div class="set-group"><label>Disk alert %</label><input class="set-input" type="number" id="sDisk" min="1" max="100"></div>
   <div class="set-group"><label>RAM alert %</label><input class="set-input" type="number" id="sRam" min="1" max="100"></div>
@@ -533,11 +534,16 @@ function closeSettings(){document.getElementById('drawerBg').classList.remove('o
 async function loadSettings(){const r=await fetch('/api/settings');settings=await r.json();applyTheme(settings.theme||'dark');
 setToggle('tBuzzer',settings.buzzer_enabled);setToggle('tPassive',settings.passive_buzzer_enabled);setToggle('tQuiet',settings.quiet_mode);setToggle('tFlash',settings.flash_hostname!==false);setToggle('tCompact',settings.compact_cards);
 sLog.value=settings.log_interval;sRefresh.value=settings.auto_refresh||5;sCpu.value=settings.cpu_alert;sDisk.value=settings.disk_alert;sRam.value=settings.ram_alert;
+if(document.getElementById('sFlashInt'))sFlashInt.value=settings.flash_interval||10;
+if(document.getElementById('sAlertRep'))sAlertRep.value=settings.alert_repeat_sec||25;
+setToggle('tNet',settings.show_net_on_card!==false);setToggle('tConfirm',settings.confirm_power!==false);
 graphVisible=settings.graph_visible||graphVisible;applyGraphVisibility();restartRefresh();
 if(settings.standalone||!settings.has_lcd)document.getElementById('lcdCard').style.display='none'}
 function setToggle(id,on){document.getElementById(id).classList.toggle('on',!!on)}
 function toggleSet(el,key){el.classList.toggle('on');settings[key]=el.classList.contains('on')}
 async function saveAllSettings(){settings.log_interval=parseInt(sLog.value)||10;settings.auto_refresh=parseInt(sRefresh.value)||5;settings.cpu_alert=parseInt(sCpu.value)||85;settings.disk_alert=parseInt(sDisk.value)||90;settings.ram_alert=parseInt(sRam.value)||90;
+if(document.getElementById('sFlashInt'))settings.flash_interval=parseInt(sFlashInt.value)||10;
+if(document.getElementById('sAlertRep'))settings.alert_repeat_sec=parseInt(sAlertRep.value)||25;
 await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});toast('Settings saved');restartRefresh();load()}
 async function testBuzzer(){await fetch('/api/buzzer/test',{method:'POST'});toast('Buzzer test sent')}
 function exportCsv(){window.location='/api/export/csv'}

@@ -15,15 +15,18 @@ BUZZER_TEST_FLAG = "/tmp/pve_buzzer_test"
 
 def fmt_rate(kbps: float) -> str:
     if kbps >= 1024:
-        return f"{kbps/1024:5.1f}M"
-    return f"{kbps:5.0f}K"
+        return f"{kbps/1024:4.1f}M"
+    return f"{kbps:4.0f}K"
 
 def fmt_uptime(secs: int) -> str:
-    if secs < 3600:
-        return f"{secs//60}m"
-    if secs < 86400:
-        return f"{secs//3600}h"
-    return f"{secs//86400}d"
+    d = secs // 86400
+    h = (secs % 86400) // 3600
+    m = (secs % 3600) // 60
+    if d > 0:
+        return f"{d}d {h:02d}h"
+    if h > 0:
+        return f"{h}h {m:02d}m"
+    return f"{m}m"
 
 def main():
     cfg = config.load_config()
@@ -42,7 +45,7 @@ def main():
             def run_setup():
                 uvicorn.run(fastapi_app, host="0.0.0.0", port=8000, log_level="warning")
             threading.Thread(target=run_setup, daemon=True).start()
-            while not config.load_config().get("setup_done"):
+            while not config.load_config().get("setup_done") or not config.load_config().get("pins_done"):
                 time.sleep(1)
             cfg = config.load_config()
 
@@ -55,7 +58,6 @@ def main():
 
     all_metrics: List[Dict[str, Any]] = []
     current_idx = min(cfg.get("default_node_idx", 0), max(0, len(cfg["nodes"]) - 1))
-    humidity = None
     stop = threading.Event()
     alert_cooldown = 0.0
     last_cfg_check = 0.0
@@ -80,20 +82,7 @@ def main():
                     log.error("DB: %s", e)
             stop.wait(cfg_now.get("log_interval", 10))
 
-    def env_worker():
-        nonlocal humidity
-        while not stop.is_set():
-            h = hw.read_humidity()
-            if h is not None:
-                humidity = h
-                try:
-                    database.log_humidity(h)
-                except Exception:
-                    pass
-            stop.wait(config.load_config().get("dht_interval", 30))
-
     threading.Thread(target=poller, daemon=True).start()
-    threading.Thread(target=env_worker, daemon=True).start()
 
     def run_web():
         uvicorn.run(fastapi_app, host="0.0.0.0", port=8000, log_level="warning", access_log=False)
@@ -115,11 +104,10 @@ def main():
             now = time.time()
             if now - last_cfg_check > 3:
                 cfg = config.load_config()
-                hw.buzzer_enabled = cfg.get("buzzer_enabled", True)
-                hw.passive_buzzer_enabled = cfg.get("passive_buzzer_enabled", True)
+                hw.buzzer_enabled = cfg.get("buzzer_enabled", True) and cfg.get("has_active_buzzer", True)
+                hw.passive_buzzer_enabled = cfg.get("passive_buzzer_enabled", True) and cfg.get("has_passive_buzzer", True)
                 last_cfg_check = now
 
-            # buzzer test from web
             if os.path.exists(BUZZER_TEST_FLAG):
                 try:
                     os.remove(BUZZER_TEST_FLAG)
@@ -146,7 +134,6 @@ def main():
                 lcd_state["in_settings"] = False
                 lcd_state["mode"] = "PAGES"
 
-            # DOUBLE tap while alerting → silence
             if g == "DOUBLE" and alerting:
                 hw.alert_silenced = True
                 alerting = False
@@ -173,18 +160,18 @@ def main():
                         i = opts.index(cfg["log_interval"]) if cfg["log_interval"] in opts else 0
                         cfg["log_interval"] = opts[(i + 1) % len(opts)]
                     elif settings_idx == 1:
-                        cfg["dht_interval"] = 60 if cfg["dht_interval"] == 30 else 30
-                    elif settings_idx == 2:
                         cfg["buzzer_enabled"] = not cfg["buzzer_enabled"]
                         hw.buzzer_enabled = cfg["buzzer_enabled"]
-                    elif settings_idx == 3:
+                    elif settings_idx == 2:
                         cfg["passive_buzzer_enabled"] = not cfg.get("passive_buzzer_enabled", True)
                         hw.passive_buzzer_enabled = cfg["passive_buzzer_enabled"]
-                    elif settings_idx == 4:
+                    elif settings_idx == 3:
                         current_idx = (current_idx + 1) % max(1, len(all_metrics) or 1)
                         cfg["default_node_idx"] = current_idx
-                    elif settings_idx == 5:
+                    elif settings_idx == 4:
                         cfg["flash_hostname"] = not cfg.get("flash_hostname", True)
+                    elif settings_idx == 5:
+                        cfg["quiet_mode"] = not cfg.get("quiet_mode", False)
                     elif settings_idx == 6:
                         if not confirm_shutdown:
                             confirm_shutdown = True
@@ -212,7 +199,7 @@ def main():
             if confirm_shutdown and now - confirm_timer > 5:
                 confirm_shutdown = False
 
-            # ---- ALERTS ----
+            # ALERTS
             alerting = False
             ram_pct = 0.0
             if metrics.get("online") and not cfg.get("quiet_mode"):
@@ -222,24 +209,25 @@ def main():
                 ram_pct = (metrics["ram_used"] / metrics["ram_total"] * 100) if metrics.get("ram_total") else 0
                 if metrics["cpu"] >= cpu_a or ram_pct >= ram_a or metrics["disk_pct"] >= disk_a:
                     alerting = True
-                    if not hw.alert_silenced and now - alert_cooldown > 25:
+                    repeat = cfg.get("alert_repeat_sec", 25)
+                    if not hw.alert_silenced and now - alert_cooldown > repeat:
                         hw.alert_tone()
                         alert_cooldown = now
                 else:
-                    hw.alert_silenced = False  # clear silence when back to normal
+                    hw.alert_silenced = False
 
-            # ---- DISPLAY ----
+            # DISPLAY
             if in_settings:
                 if confirm_shutdown and settings_idx == 6:
-                    hw.force_display("SHUTDOWN?", "HOLD to confirm")
+                    hw.force_display("  SHUTDOWN?   ", " HOLD = send  ")
                 else:
                     labels = [
                         ("Log Interval", f"> {cfg['log_interval']}s"),
-                        ("DHT Interval", f"> {cfg['dht_interval']}s"),
                         ("Act Buzzer", f"> {'ON' if cfg['buzzer_enabled'] else 'OFF'}"),
                         ("Pas Buzzer", f"> {'ON' if cfg.get('passive_buzzer_enabled') else 'OFF'}"),
                         ("Active Node", f"> {(metrics.get('name') or '?')[:10]}"),
                         ("Name Flash", f"> {'ON' if cfg.get('flash_hostname', True) else 'OFF'}"),
+                        ("Quiet Mode", f"> {'ON' if cfg.get('quiet_mode') else 'OFF'}"),
                         ("Shutdown", "> HOLD=send"),
                     ]
                     title, val = labels[settings_idx]
@@ -247,7 +235,7 @@ def main():
                 lcd_state["mode"] = "SETTINGS"
             else:
                 do_flash = cfg.get("flash_hostname", True)
-                flash_int = cfg.get("hostname_flash", cfg.get("flash_interval", 10))
+                flash_int = cfg.get("flash_interval", 10)
                 if do_flash and now - last_flash >= flash_int:
                     flash_active = True
                     last_flash = now
@@ -260,25 +248,27 @@ def main():
                     flash_active = False
                     lcd_state["mode"] = "PAGES"
                     if alerting and not hw.alert_silenced:
-                        hw.force_display("    ALERT     ", "              ")
+                        # centered ALERT + one-line metrics
+                        line2 = f"C{metrics['cpu']:.0f} R{ram_pct:.0f} D{metrics['disk_pct']:.0f}"
+                        hw.force_display("     ALERT     ", f"{line2:^16}")
                     elif not metrics.get("online"):
                         hw.display(" System Offline", f"{(metrics.get('name') or '')[:16]:^16}")
                     else:
                         if page == 0:
                             hw.display(f"CPU: {metrics['cpu']:5.1f}%    ", f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G")
                         elif page == 1:
-                            hw.display(f"Disk: {metrics['disk_pct']:5.1f}%   ", f"VMs:  {metrics['active_vms']:3d}      ")
+                            hw.display(f"Disk: {metrics['disk_pct']:5.1f}%   ", f"VMs : {metrics['active_vms']:3d}      ")
                         elif page == 2:
                             up = fmt_rate(metrics["net_out"])
                             dn = fmt_rate(metrics["net_in"])
-                            hw.display(f"Up:  {up}     ", f"Dn:  {dn}     ")
+                            hw.display(f"Up : {up}      ", f"Dn : {dn}      ")
                         elif page == 3:
                             uptime = fmt_uptime(metrics.get("uptime", 0))
-                            hw.display(f"Uptime: {uptime:<7}", f"{(metrics.get('name') or '')[:16]:^16}")
+                            hw.display(f" Uptime {uptime:>7} ", f"{(metrics.get('name') or '')[:16]:^16}")
                         else:
                             ip = (metrics.get("ip") or "?")[:16]
-                            ntype = metrics.get("type", "server")[:6]
-                            hw.display(f"{ip:<16}", f"Type: {ntype:<10}")
+                            ntype = (metrics.get("type") or "server")[:8]
+                            hw.display(f"{ip:<16}", f"  {ntype:^12}  ")
 
             lcd_state["last_lines"] = hw.get_display_text()
             lcd_state["page"] = page

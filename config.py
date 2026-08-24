@@ -5,18 +5,13 @@ from typing import Any, Dict, List
 CONFIG_FILE = "config.json"
 
 DEFAULT_NODE = {
-    "name": "Precision",
-    "ip": "",
-    "node": "pve",
-    "user": "root@pam",
-    "password": "",
-    "type": "server",
+    "name": "Precision", "ip": "", "node": "pve",
+    "user": "root@pam", "password": "", "type": "server",
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "nodes": [],
     "log_interval": 10,
-    "dht_interval": 30,
     "hold_time": 0.5,
     "multi_tap_window": 0.45,
     "buzzer_enabled": True,
@@ -38,18 +33,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "graph_order": ["cpu", "ram", "net"],
     "graph_visible": {"cpu": True, "ram": True, "net": True, "disk": False},
     "auto_refresh": 5,
-    # components installed
+    "show_net_on_card": True,
+    "confirm_power": True,
+    "alert_repeat_sec": 25,
     "has_lcd": True,
     "has_touch": True,
     "has_active_buzzer": True,
     "has_passive_buzzer": True,
-    "has_dht": True,
-    # GPIO (BCM)
     "gpio_touch": 27,
     "gpio_active_buzzer": 6,
     "gpio_passive_buzzer": 16,
-    "gpio_dht": 4,
-    "lcd_mode": "parallel",   # "parallel" | "i2c"
+    "lcd_mode": "parallel",
     "lcd_rs": 22,
     "lcd_en": 17,
     "lcd_d4": 25,
@@ -66,18 +60,18 @@ def load_config() -> Dict[str, Any]:
         cfg = json.load(f)
     if "pve_ip" in cfg and "nodes" not in cfg:
         cfg["nodes"] = [{
-            "name": cfg.get("pve_node", "pve"),
-            "ip": cfg.get("pve_ip", ""),
-            "node": cfg.get("pve_node", "pve"),
-            "user": cfg.get("pve_user", "root@pam"),
-            "password": cfg.get("pve_password", ""),
-            "type": "server",
+            "name": cfg.get("pve_node", "pve"), "ip": cfg.get("pve_ip", ""),
+            "node": cfg.get("pve_node", "pve"), "user": cfg.get("pve_user", "root@pam"),
+            "password": cfg.get("pve_password", ""), "type": "server",
         }]
         for k in ("pve_ip", "pve_node", "pve_user", "pve_password"):
             cfg.pop(k, None)
     for k, v in DEFAULT_CONFIG.items():
         if k not in cfg:
             cfg[k] = v
+    cfg.pop("has_dht", None)
+    cfg.pop("gpio_dht", None)
+    cfg.pop("dht_interval", None)
     return cfg
 
 def save_config(cfg: Dict[str, Any]) -> None:
