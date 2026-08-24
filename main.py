@@ -175,30 +175,30 @@ def main():
                     last_flash = now
                 if flash_active and now - last_flash <= cfg.get("flash_duration", 2):
                     name = metrics.get("name", "?")[:14]
-                    hw.display("NODE:", f"[{name.center(14)}]")
+                    hw.display("     NODE:     ", f"[{name.center(14)}]")
                 else:
                     flash_active = False
-                    if not metrics.get("online"):
-                        hw.display("System Offline", metrics.get("name", "")[:16])
-                    else:
-                        if page == 0:
-                            hw.display(
-                                f"CPU {metrics['cpu']:5.1f}%     ",
-                                f"RAM {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G"
-                            )
-                        elif page == 1:
-                            hw.display(
-                                f"Disk {metrics['disk_pct']:5.1f}%    ",
-                                f"VMs  {metrics['active_vms']:3d}       "
-                            )
-                        elif page == 2:
-                            up = fmt_rate(metrics["net_out"])
-                            dn = fmt_rate(metrics["net_in"])
-                            hw.display(f"Net Up {up}   ", f"Net Dn {dn}   ")
-                        else:
-                            uptime = fmt_uptime(metrics.get("uptime", 0))
-                            hum = f"{humidity:.0f}%" if humidity is not None else "--%"
-                            hw.display(f"Up {uptime:<6}      ", f"Hum {hum:<6}      ")
+            if not metrics.get("online"):
+                hw.display(" System Offline", f"{metrics.get('name','')[:16]:^16}")
+            else:
+                if page == 0:
+                    hw.display(
+                        f"CPU: {metrics['cpu']:5.1f}%    ",
+                        f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G"
+                    )
+                elif page == 1:
+                    hw.display(
+                        f"Disk: {metrics['disk_pct']:5.1f}%   ",
+                        f"VMs:  {metrics['active_vms']:3d}      "
+                    )
+                elif page == 2:
+                    up = fmt_rate(metrics["net_out"])
+                    dn = fmt_rate(metrics["net_in"])
+                    hw.display(f"Up:  {up}     ", f"Dn:  {dn}     ")
+                else:
+                    uptime = fmt_uptime(metrics.get("uptime", 0))
+                    hum = f"{humidity:.0f}%" if humidity is not None else "--%"
+                    hw.display(f"Up:  {uptime:<6}    ", f"Hum: {hum:<6}    ")
 
             time.sleep(0.035)
     except KeyboardInterrupt:
