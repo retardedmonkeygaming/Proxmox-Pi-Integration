@@ -27,7 +27,7 @@ def save_config(config_data):
 
 def run_setup_wizard():
     print("=" * 50)
-    print("      T5500 SERVER MONITOR - FIRST BOOT SETUP     ")
+    print("      PVE NODE MONITOR - FIRST BOOT SETUP     ")
     print("=" * 50)
     
     config = DEFAULT_CONFIG.copy()

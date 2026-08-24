@@ -2,7 +2,7 @@ import sqlite3
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
-app = FastAPI(title="T5500 Server Monitor Dashboard")
+app = FastAPI(title="Proxmox Node Monitor Dashboard")
 DB_FILE = "monitor.db"
 
 def get_db_connection():
@@ -53,7 +53,7 @@ def render_dashboard():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>T5500 & Desk Monitor</title>
+        <title>Proxmox Node Monitor</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
