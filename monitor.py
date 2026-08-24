@@ -9,8 +9,7 @@ class ProxmoxMonitor:
         self.node = node
         self.user = user
         self.password = password
-        self.ticket = None
-        self.csrf = None
+        self.ticket, self.csrf = None, None
 
     def authenticate(self):
         try:
@@ -19,35 +18,50 @@ class ProxmoxMonitor:
             res = requests.post(url, data=data, verify=False, timeout=3)
             if res.status_code == 200:
                 d = res.json()["data"]
-                self.ticket = d["ticket"]
-                self.csrf = d["CSRFPreventionToken"]
+                self.ticket, self.csrf = d["ticket"], d["CSRFPreventionToken"]
                 return True
         except Exception:
             pass
         return False
 
     def get_stats(self):
-        if not self.ticket:
-            if not self.authenticate():
-                return None
+        if not self.ticket and not self.authenticate():
+            return None
         
         try:
-            url = f"{self.base_url}/nodes/{self.node}/status"
             headers = {"CSRFPreventionToken": self.csrf}
             cookies = {"PVEAuthCookie": self.ticket}
-            res = requests.get(url, headers=headers, cookies=cookies, verify=False, timeout=3)
+
+            # Node Status
+            res = requests.get(f"{self.base_url}/nodes/{self.node}/status", headers=headers, cookies=cookies, verify=False, timeout=3)
+            if res.status_code == 401 and self.authenticate():
+                return self.get_stats()
             
-            if res.status_code == 401:  # Token expired
-                if self.authenticate():
-                    return self.get_stats()
-                return None
-                
+            # Active VMs / LXC Containers
+            res_vms = requests.get(f"{self.base_url}/nodes/{self.node}/qemu", headers=headers, cookies=cookies, verify=False, timeout=3)
+            res_lxc = requests.get(f"{self.base_url}/nodes/{self.node}/lxc", headers=headers, cookies=cookies, verify=False, timeout=3)
+            
             if res.status_code == 200:
-                data = res.json()["data"]
-                cpu = round(data["cpu"] * 100, 1)
-                ram_u = round(data["memory"]["used"] / (1024**3), 1)
-                ram_t = round(data["memory"]["total"] / (1024**3), 1)
-                return {"cpu": cpu, "ram_used": ram_u, "ram_total": ram_t}
+                d = res.json()["data"]
+                cpu = round(d["cpu"] * 100, 1)
+                ram_u = round(d["memory"]["used"] / (1024**3), 1)
+                ram_t = round(d["memory"]["total"] / (1024**3), 1)
+                disk_pct = round((d["rootfs"]["used"] / d["rootfs"]["total"]) * 100, 1)
+
+                active_vms = 0
+                if res_vms.status_code == 200:
+                    active_vms += sum(1 for vm in res_vms.json()["data"] if vm.get("status") == "running")
+                if res_lxc.status_code == 200:
+                    active_vms += sum(1 for lxc in res_lxc.json()["data"] if lxc.get("status") == "running")
+
+                return {
+                    "node": self.node,
+                    "cpu": cpu,
+                    "ram_used": ram_u,
+                    "ram_total": ram_t,
+                    "disk_pct": disk_pct,
+                    "active_vms": active_vms
+                }
         except Exception:
             pass
         return None
