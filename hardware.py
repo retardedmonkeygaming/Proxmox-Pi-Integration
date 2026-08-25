@@ -5,6 +5,7 @@ import RPi.GPIO as GPIO
 
 _BOARD_MAP = None
 
+
 def _get_board_map():
     global _BOARD_MAP
     if _BOARD_MAP is None:
@@ -16,6 +17,7 @@ def _get_board_map():
             26: board.D26, 27: board.D27,
         }
     return _BOARD_MAP
+
 
 class HardwareManager:
     def __init__(self, cfg: Dict[str, Any]):
@@ -102,7 +104,7 @@ class HardwareManager:
             pass
 
     def _tone(self, freq_approx_ms, duration):
-        """Software square-wave on passive pin for a more audible tone."""
+        """Software square-wave on passive pin."""
         if not self.passive_buzzer_enabled or self.standalone:
             return
         try:
@@ -116,7 +118,6 @@ class HardwareManager:
         except Exception:
             pass
 
-    
     def pattern(self, name: str = "info"):
         """Software patterns on passive buzzer: info / warn / critical."""
         if not self.passive_buzzer_enabled or self.standalone:
@@ -140,17 +141,10 @@ class HardwareManager:
             pass
 
     def alert_tone(self):
-        """Clear 3-beep alarm pattern (not just clicks)."""
-        self.pattern("critical")
-        return  # patterns handle it
-        if not self.passive_buzzer_enabled or self.alert_silenced or self.standalone:
+        """Clear alarm pattern."""
+        if self.alert_silenced or self.standalone:
             return
-        # three rising tones
-        for ms in (3.0, 2.2, 1.6):
-            self._tone(ms, 0.18)
-            time.sleep(0.08)
-        time.sleep(0.15)
-        self._tone(2.0, 0.35)
+        self.pattern("critical")
 
     def test_beep(self):
         self.beep(0.05, 2)

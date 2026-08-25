@@ -2,6 +2,7 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
+
 def setup_logging(level: str = "INFO") -> logging.Logger:
     os.makedirs("logs", exist_ok=True)
     logger = logging.getLogger("pve_node_monitor")

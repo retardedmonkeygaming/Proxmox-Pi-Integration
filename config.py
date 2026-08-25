@@ -33,17 +33,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "cpu_alert": 85,
     "disk_alert": 90,
     "ram_alert": 90,
-    "quiet_hours": "",          # e.g. "22:00-07:00"
-    "disk_free_gb_alert": None, # absolute free GB threshold
+    "quiet_hours": "",
+    "disk_free_gb_alert": None,
     "retention_days": 14,
-    "ui_pin": "",              # empty = disabled
+    "ui_pin": "",
     "clock_12h": False,
-    "theme_pack": "default",  # default|cyberpunk|terminal|nord
-    "layout_preset": "work",  # work|night|minimal
+    "theme_pack": "default",
+    "layout_preset": "work",
     "webhook_url": "",
     "offline_sound": True,
     "power_rate_limit_sec": 30,
-    "lcd_pages_enabled": [0,1,2,3,4],
+    "lcd_pages_enabled": [0, 1, 2, 3, 4, 5, 6],
     "show_minmax": True,
     "theme": "dark",
     "accent": "#3b82f6",
@@ -71,6 +71,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "lcd_i2c_addr": "0x27",
 }
 
+
 def load_config() -> Dict[str, Any]:
     if not os.path.exists(CONFIG_FILE):
         return DEFAULT_CONFIG.copy()
@@ -87,7 +88,6 @@ def load_config() -> Dict[str, Any]:
     for k, v in DEFAULT_CONFIG.items():
         if k not in cfg:
             cfg[k] = v
-    # ensure node extra fields
     for n in cfg.get("nodes", []):
         n.setdefault("note", "")
         n.setdefault("favorite", False)
@@ -100,9 +100,11 @@ def load_config() -> Dict[str, Any]:
     cfg.pop("dht_interval", None)
     return cfg
 
+
 def save_config(cfg: Dict[str, Any]) -> None:
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=4)
+
 
 def run_terminal_wizard() -> Dict[str, Any]:
     print("=" * 56)

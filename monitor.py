@@ -8,6 +8,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 log = logging.getLogger("pve_node_monitor")
 
+
 class NodeClient:
     def __init__(self, name: str, ip: str, node: str, user: str, password: str, ntype: str = "server"):
         self.name = name
@@ -114,10 +115,21 @@ class NodeClient:
             self.online = True
             self.last_ok = time.time()
             return {
-                "name": self.name, "ip": self.ip, "node": self.node, "type": self.ntype,
-                "cpu": cpu, "ram_used": ram_u, "ram_total": ram_t, "disk_pct": disk,
-                "active_vms": active, "net_in": net_in, "net_out": net_out,
-                "uptime": uptime, "online": True, "load1": load1, "top_vm": self._top_name,
+                "name": self.name,
+                "ip": self.ip,
+                "node": self.node,
+                "type": self.ntype,
+                "cpu": cpu,
+                "ram_used": ram_u,
+                "ram_total": ram_t,
+                "disk_pct": disk,
+                "active_vms": active,
+                "net_in": net_in,
+                "net_out": net_out,
+                "uptime": uptime,
+                "online": True,
+                "load1": load1,
+                "top_vm": self._top_name,
             }
         except Exception as e:
             log.debug("%s stats: %s", self.name, e)
@@ -176,7 +188,9 @@ class NodeClient:
         return out
 
     def guest_power(self, vmid: int, kind: str, action: str) -> bool:
-        if kind not in ("qemu", "lxc") or action not in ("start", "stop", "shutdown", "reboot", "suspend", "resume"):
+        if kind not in ("qemu", "lxc"):
+            return False
+        if action not in ("start", "stop", "shutdown", "reboot", "suspend", "resume"):
             return False
         if not self.ticket and not self.authenticate():
             return False
@@ -194,13 +208,19 @@ class NodeClient:
 class ProxmoxManager:
     def __init__(self, nodes_cfg: List[Dict]):
         self.clients = [
-            NodeClient(n["name"], n["ip"], n["node"], n["user"], n["password"], n.get("type", "server"))
+            NodeClient(
+                n["name"], n["ip"], n["node"], n["user"], n["password"],
+                n.get("type", "server"),
+            )
             for n in nodes_cfg
         ]
 
     def reload(self, nodes_cfg: List[Dict]):
         self.clients = [
-            NodeClient(n["name"], n["ip"], n["node"], n["user"], n["password"], n.get("type", "server"))
+            NodeClient(
+                n["name"], n["ip"], n["node"], n["user"], n["password"],
+                n.get("type", "server"),
+            )
             for n in nodes_cfg
         ]
 
@@ -213,9 +233,11 @@ class ProxmoxManager:
             else:
                 results.append({
                     "name": c.name, "ip": c.ip, "node": c.node, "type": c.ntype,
-                    "online": False, "cpu": 0, "ram_used": 0, "ram_total": 0,
-                    "disk_pct": 0, "active_vms": 0, "net_in": 0, "net_out": 0,
-                    "uptime": 0, "load1": 0, "top_vm": "—",
+                    "online": False,
+                    "cpu": 0, "ram_used": 0, "ram_total": 0,
+                    "disk_pct": 0, "active_vms": 0,
+                    "net_in": 0, "net_out": 0, "uptime": 0,
+                    "load1": 0, "top_vm": "—",
                 })
         return results
 
