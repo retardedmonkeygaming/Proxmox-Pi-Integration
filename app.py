@@ -142,8 +142,7 @@ def api_get_settings():
     keys = ["buzzer_enabled","passive_buzzer_enabled","quiet_mode","compact_cards","flash_hostname",
             "log_interval","cpu_alert","disk_alert","ram_alert","theme","graph_visible","graph_range",
             "auto_refresh","standalone","has_lcd","has_touch","has_active_buzzer","has_passive_buzzer",
-            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval","density","accent",
-            "quiet_hours","disk_free_gb_alert","webhook_url","offline_sound","alert_escalation"]
+            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval","density","accent"]
     return {k: cfg.get(k) for k in keys}
 
 @app.post("/api/settings")
@@ -180,7 +179,7 @@ def api_lcd_state():
 @app.post("/api/lcd/{action}")
 def api_lcd_action(action: str):
     if action == "page":
-        lcd_state["page"] = (lcd_state["page"] + 1) % 5; lcd_state["in_settings"] = False; lcd_state["mode"] = "PAGES"
+        lcd_state["page"] = (lcd_state["page"] + 1) % 7; lcd_state["in_settings"] = False; lcd_state["mode"] = "PAGES"
     elif action == "settings":
         lcd_state["in_settings"] = True; lcd_state["settings_idx"] = 0; lcd_state["mode"] = "SETTINGS"
     elif action == "change":
@@ -263,8 +262,7 @@ async def api_config_restore(request: Request):
     # merge non-sensitive
     for k in ("log_interval", "theme", "density", "cpu_alert", "ram_alert", "disk_alert",
               "graph_visible", "graph_range", "auto_refresh", "quiet_mode", "flash_hostname",
-              "alert_repeat_sec", "confirm_power", "show_net_on_card", "accent",
-              "quiet_hours", "disk_free_gb_alert", "webhook_url", "offline_sound", "alert_escalation"):
+              "alert_repeat_sec", "confirm_power", "show_net_on_card", "accent"):
         if k in data:
             cfg[k] = data[k]
     config.save_config(cfg)
@@ -626,7 +624,7 @@ header{background:var(--header-bg);border-bottom:1px solid var(--border);padding
 .btn-reboot{background:var(--orange);color:#fff;flex:1;padding:9px;font-size:.82rem;border-radius:8px;border:none;font-weight:600;cursor:pointer}
 .btn-shutdown{background:var(--red);color:#fff;flex:1;padding:9px;font-size:.82rem;border-radius:8px;border:none;font-weight:600;cursor:pointer}
 .btn-icon{background:transparent;border:1px solid var(--border);color:var(--muted);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center}.btn-icon:hover{color:var(--text);background:var(--hover)}
-.side-col{display:flex;flex-direction:column;gap:14px}.side-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px}
+.left-col{display:flex;flex-direction:column;min-width:0}.side-col{display:flex;flex-direction:column;gap:14px}.side-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px}
 .side-card h3{font-size:.88rem;font-weight:600;margin-bottom:2px}.side-card .sub{font-size:.72rem;color:var(--muted);margin-bottom:10px}
 .lcd-preview{background:var(--lcd-bg);color:var(--lcd-text);font-family:"Courier New",monospace;font-size:15px;line-height:1.55;padding:14px 16px;border-radius:8px;letter-spacing:1.5px;margin-bottom:10px;min-height:56px;box-shadow:inset 0 0 20px rgba(0,0,0,.55);white-space:pre}
 .lcd-btns{display:flex;gap:5px;flex-wrap:wrap}.lcd-btns button{flex:1;min-width:56px;padding:6px 3px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.72rem;font-weight:500;cursor:pointer}.lcd-btns button:hover{border-color:var(--accent);color:var(--accent)}
@@ -678,7 +676,19 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   </div>
 </header>
 <div class="main">
-  <div id="nodesCol"></div>
+  <div class="left-col">
+    <div id="nodesCol"></div>
+    <div class="side-card" id="guestCycleCard" style="margin-top:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <h3 style="margin:0;font-size:.95rem">Guests</h3>
+          <div class="sub" style="margin:0" id="guestCycleSub">Cycling VMs / LXCs</div>
+        </div>
+        <button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:.72rem" onclick="openGuestsFromCycle()">Open</button>
+      </div>
+      <div id="guestCycleBody" style="min-height:72px;font-size:.85rem;color:var(--muted)">Loading guests…</div>
+    </div>
+  </div>
   <div class="side-col">
     <div class="side-card" id="lcdCard">
       <span class="lcd-mode" id="lcdMode">PAGES</span>
@@ -738,9 +748,6 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   <div class="set-group"><label>CPU alert %</label><input class="set-input" type="number" id="sCpu" min="1" max="100"></div>
   <div class="set-group"><label>Disk alert %</label><input class="set-input" type="number" id="sDisk" min="1" max="100"></div>
   <div class="set-group"><label>RAM alert %</label><input class="set-input" type="number" id="sRam" min="1" max="100"></div>
-  <div class="set-group"><label>Accent color</label>
-    <input class="set-input" type="color" id="sAccent" value="#3b82f6" style="height:36px;padding:2px">
-  </div>
   <div class="set-group"><label>Density</label>
     <select class="set-input" id="sDensity">
       <option value="comfortable">Comfortable</option>
@@ -748,17 +755,6 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
       <option value="dense">Dense</option>
     </select>
   </div>
-  <div class="set-group"><label>Quiet hours (HH:MM-HH:MM)</label>
-    <input class="set-input" id="sQuietHours" placeholder="22:00-07:00">
-  </div>
-  <div class="set-group"><label>Disk free alert (GB left)</label>
-    <input class="set-input" type="number" id="sDiskFree" placeholder="e.g. 20" min="0" step="0.5">
-  </div>
-  <div class="set-group"><label>Webhook URL</label>
-    <input class="set-input" id="sWebhook" placeholder="Discord / Telegram / generic HTTPS">
-  </div>
-  <div class="set-row"><div><label>Offline sound</label><div class="hint">Browser beep when a node drops</div></div><button class="toggle" id="tOfflineSound" onclick="toggleSet(this,'offline_sound')"></button></div>
-  <div class="set-row"><div><label>Alert escalation</label><div class="hint">Beep → warn → critical tone</div></div><button class="toggle" id="tEscalation" onclick="toggleSet(this,'alert_escalation')"></button></div>
   <div class="drawer-actions">
     <button class="btn-cancel" onclick="testBuzzer()">Test buzzer</button>
     <button class="btn-primary" onclick="saveAllSettings()">Save settings</button>
@@ -796,13 +792,13 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   <div class="modal-actions"><div class="spacer"></div>
   <button class="btn btn-cancel" onclick="closeGuests()">Close</button></div>
 </div></div>
-<div class="modal-bg" id="bulkModal"><div class="modal">
+<div class="modal-bg" id="bulkModal"><div class="modal" style="max-width:420px">
   <h2>Bulk power</h2>
   <div class="sub">Select nodes then reboot or shutdown</div>
-  <div id="bulkList" style="max-height:240px;overflow-y:auto;margin:12px 0"></div>
-  <div class="modal-actions">
-    <button class="btn btn-reboot" onclick="bulkPower('reboot')">Reboot selected</button>
-    <button class="btn btn-shutdown" onclick="bulkPower('shutdown')">Shutdown selected</button>
+  <div id="bulkList" style="max-height:280px;overflow-y:auto;margin:14px 0;display:flex;flex-direction:column;gap:6px"></div>
+  <div class="modal-actions" style="flex-wrap:wrap">
+    <button class="btn btn-reboot" style="flex:1;min-width:120px" onclick="bulkPower('reboot')">Reboot selected</button>
+    <button class="btn btn-shutdown" style="flex:1;min-width:120px" onclick="bulkPower('shutdown')">Shutdown selected</button>
     <button class="btn btn-cancel" onclick="closeBulk()">Cancel</button>
   </div>
 </div></div>
@@ -852,11 +848,6 @@ if(document.getElementById('sAccent')){sAccent.value=settings.accent||'#3b82f6';
 sLog.value=settings.log_interval;sRefresh.value=settings.auto_refresh||5;sCpu.value=settings.cpu_alert;sDisk.value=settings.disk_alert;sRam.value=settings.ram_alert;
 if(document.getElementById('sFlashInt'))sFlashInt.value=settings.flash_interval||10;
 if(document.getElementById('sAlertRep'))sAlertRep.value=settings.alert_repeat_sec||25;
-if(document.getElementById('sQuietHours'))sQuietHours.value=settings.quiet_hours||'';
-if(document.getElementById('sDiskFree'))sDiskFree.value=settings.disk_free_gb_alert!=null?settings.disk_free_gb_alert:'';
-if(document.getElementById('sWebhook'))sWebhook.value=settings.webhook_url||'';
-if(document.getElementById('tOfflineSound'))setToggle('tOfflineSound',settings.offline_sound!==false);
-if(document.getElementById('tEscalation'))setToggle('tEscalation',settings.alert_escalation!==false);
 setToggle('tNet',settings.show_net_on_card!==false);setToggle('tConfirm',settings.confirm_power!==false);
 graphVisible=settings.graph_visible||graphVisible;applyGraphVisibility();restartRefresh();
 if(settings.standalone||!settings.has_lcd){const el=document.getElementById('lcdCard');if(el)el.style.display='none'}
@@ -868,9 +859,6 @@ if(document.getElementById('sAccent')){settings.accent=sAccent.value;applyAccent
 settings.log_interval=parseInt(sLog.value)||10;settings.auto_refresh=parseInt(sRefresh.value)||5;settings.cpu_alert=parseInt(sCpu.value)||85;settings.disk_alert=parseInt(sDisk.value)||90;settings.ram_alert=parseInt(sRam.value)||90;
 if(document.getElementById('sFlashInt'))settings.flash_interval=parseInt(sFlashInt.value)||10;
 if(document.getElementById('sAlertRep'))settings.alert_repeat_sec=parseInt(sAlertRep.value)||25;
-if(document.getElementById('sQuietHours'))settings.quiet_hours=sQuietHours.value.trim();
-if(document.getElementById('sDiskFree')){const v=sDiskFree.value;settings.disk_free_gb_alert=(v===''||v==null)?null:parseFloat(v)}
-if(document.getElementById('sWebhook'))settings.webhook_url=sWebhook.value.trim();
 await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});toast('Settings saved');restartRefresh();load()}
 async function testBuzzer(){await fetch('/api/buzzer/test',{method:'POST'});toast('Buzzer test sent')}
 function backupConfig(){window.location='/api/config/backup'}
@@ -901,7 +889,7 @@ async function load(){
   nodes.forEach(n=>{const on=n.online==1;const ramPct=n.ram_total_gb?(n.ram_used_gb/n.ram_total_gb*100):0;
   const card=document.createElement('div');card.className='node-card'+(on?'':' offline');
   // offline toast
-  if(prevOnline[n.node_name]===1 && !on){toast('⚠ '+n.node_name+' went offline');playOfflineSound();}
+  if(prevOnline[n.node_name]===1 && !on) toast('⚠ '+n.node_name+' went offline');
   if(prevOnline[n.node_name]===0 && on) toast('✓ '+n.node_name+' back online');
   prevOnline[n.node_name]=on?1:0;
   const fav=n.favorite?'★':'☆';
@@ -929,16 +917,65 @@ let graphRange = '1h';
 let prevOnline = {};
 
 
-function playOfflineSound(){
-  if(settings && settings.offline_sound===false) return;
-  try{
-    const ctx=new (window.AudioContext||window.webkitAudioContext)();
-    const o=ctx.createOscillator(); const g=ctx.createGain();
-    o.connect(g); g.connect(ctx.destination);
-    o.frequency.value=440; g.gain.value=0.08;
-    o.start(); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.4);
-    o.stop(ctx.currentTime+0.45);
-  }catch(e){}
+let guestCycleList = [];
+let guestCycleIdx = 0;
+let guestCycleNode = null;
+let guestCycleTimer = null;
+
+async function refreshGuestCycle() {
+  const body = document.getElementById('guestCycleBody');
+  const sub = document.getElementById('guestCycleSub');
+  if (!body) return;
+  const nodes = allNodesCache || [];
+  const online = nodes.filter(n => n.online == 1);
+  const target = online[0] || nodes[0];
+  if (!target) {
+    body.innerHTML = '<div style="opacity:.6">Add a node to see guests</div>';
+    guestCycleList = [];
+    return;
+  }
+  guestCycleNode = target.node_name;
+  try {
+    const r = await fetch('/api/nodes/' + encodeURIComponent(guestCycleNode) + '/guests');
+    const j = await r.json();
+    guestCycleList = (j.ok && j.guests) ? j.guests : [];
+  } catch (e) {
+    guestCycleList = [];
+  }
+  if (sub) sub.textContent = guestCycleNode + ' · ' + guestCycleList.length + ' guests';
+  if (!guestCycleList.length) {
+    body.innerHTML = '<div style="opacity:.6">No VMs or containers</div>';
+    return;
+  }
+  guestCycleIdx = guestCycleIdx % guestCycleList.length;
+  renderGuestCycle();
+}
+
+function renderGuestCycle() {
+  const body = document.getElementById('guestCycleBody');
+  if (!body || !guestCycleList.length) return;
+  const g = guestCycleList[guestCycleIdx % guestCycleList.length];
+  const run = g.status === 'running';
+  body.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="flex:1">
+        <div style="font-weight:600;color:var(--text)">${g.name}</div>
+        <div style="font-size:.75rem;margin-top:2px">${g.type} ${g.vmid} · <span style="color:${run?'var(--green)':'var(--muted)'}">${g.status}</span></div>
+        ${run ? `<div style="font-size:.75rem;margin-top:4px;opacity:.8">CPU ${g.cpu}% · RAM ${g.mem}/${g.maxmem}G</div>` : ''}
+      </div>
+      <div style="font-size:.7rem;opacity:.5">${(guestCycleIdx%guestCycleList.length)+1}/${guestCycleList.length}</div>
+    </div>`;
+}
+
+function tickGuestCycle() {
+  if (!guestCycleList.length) return;
+  guestCycleIdx = (guestCycleIdx + 1) % guestCycleList.length;
+  renderGuestCycle();
+}
+
+function openGuestsFromCycle() {
+  if (guestCycleNode) openGuests(guestCycleNode);
+  else toast('No node');
 }
 
 function relTime(ts) {
@@ -1058,10 +1095,13 @@ async function guestAct(node, vmid, kind, action) {
 let bulkNodes = [];
 async function openBulk() {
   const nodes = await fetch('/api/current').then(r=>r.json());
+  if (!nodes.length) { toast('No nodes'); return; }
   bulkList.innerHTML = nodes.map(n =>
-    `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
-      <input type="checkbox" value="${n.node_name}" ${n.online==1?'':'disabled'}> ${n.node_name}
-      <span style="margin-left:auto;font-size:.72rem;color:var(--muted)">${n.online==1?'online':'offline'}</span>
+    `<label style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;cursor:pointer;background:var(--bg)">
+      <input type="checkbox" value="${n.node_name}" ${n.online==1?'':'disabled'}
+        style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)">
+      <span style="flex:1;font-weight:600">${n.node_name}</span>
+      <span style="font-size:.72rem;color:${n.online==1?'var(--green)':'var(--muted)'}">${n.online==1?'online':'offline'}</span>
     </label>`
   ).join('');
   bulkModal.classList.add('open');
@@ -1172,4 +1212,6 @@ function applyAccent(c) {
 function openEdit(name,ip,node,type){openAddModal(name);mName.value=name;mIp.value=ip;mNode.value=node;setType(type==='node'?'node':'server')}
 loadSettings().then(()=>{load();loadAlerts();loadActivity();});
 setInterval(()=>{loadAlerts();loadActivity();}, 15000);
+setInterval(tickGuestCycle, 4000);
+setInterval(refreshGuestCycle, 30000);
 </script></body></html>"""

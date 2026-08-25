@@ -22,6 +22,8 @@ class NodeClient:
         self.session.verify = False
         self.last_ok = 0.0
         self.online = False
+        self._top_cpu = -1.0
+        self._top_name = "—"
 
     def authenticate(self) -> bool:
         try:
@@ -46,6 +48,8 @@ class NodeClient:
         return {"PVEAuthCookie": self.ticket or ""}
 
     def get_stats(self) -> Optional[Dict[str, Any]]:
+        self._top_cpu = -1.0
+        self._top_name = "—"
         if not self.ticket and not self.authenticate():
             self.online = False
             return None
@@ -65,10 +69,18 @@ class NodeClient:
 
             d = r.json()["data"]
             cpu = round(float(d["cpu"]) * 100, 1)
+            load1 = 0.0
+            try:
+                la = d.get("loadavg")
+                if isinstance(la, (list, tuple)) and la:
+                    load1 = round(float(la[0]), 2)
+                elif la is not None:
+                    load1 = round(float(la), 2)
+            except Exception:
+                pass
             ram_u = round(d["memory"]["used"] / 1024**3, 1)
             ram_t = round(d["memory"]["total"] / 1024**3, 1)
             disk = round((d["rootfs"]["used"] / d["rootfs"]["total"]) * 100, 1)
-            disk_free_gb = round((d["rootfs"]["total"] - d["rootfs"]["used"]) / 1024**3, 1)
             uptime = int(d.get("uptime", 0))
 
             active = 0
@@ -78,7 +90,14 @@ class NodeClient:
                     headers=self._h(), cookies=self._c(), timeout=5,
                 )
                 if rr.status_code == 200:
-                    active += sum(1 for g in rr.json().get("data", []) if g.get("status") == "running")
+                    guests = rr.json().get("data", [])
+                    active += sum(1 for g in guests if g.get("status") == "running")
+                    for g in guests:
+                        if g.get("status") == "running":
+                            c = float(g.get("cpu", 0) or 0)
+                            if c > self._top_cpu:
+                                self._top_cpu = c
+                                self._top_name = (g.get("name") or str(g.get("vmid")))[:14]
 
             net_in = net_out = 0.0
             try:
@@ -104,7 +123,7 @@ class NodeClient:
                 "node": self.node,
                 "type": self.ntype,
                 "cpu": cpu, "ram_used": ram_u, "ram_total": ram_t,
-                "disk_pct": disk, "disk_free_gb": disk_free_gb, "active_vms": active,
+                "disk_pct": disk, "active_vms": active,
                 "net_in": net_in, "net_out": net_out,
                 "uptime": uptime, "online": True,
             }
@@ -209,7 +228,7 @@ class ProxmoxManager:
                     "name": c.name, "ip": c.ip, "node": c.node, "type": c.ntype,
                     "online": False,
                     "cpu": 0, "ram_used": 0, "ram_total": 0,
-                    "disk_pct": 0, "disk_free_gb": 0, "active_vms": 0,
+                    "disk_pct": 0, "active_vms": 0,
                     "net_in": 0, "net_out": 0, "uptime": 0,
                 })
         return results

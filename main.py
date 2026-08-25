@@ -2,7 +2,6 @@ import time
 import threading
 import os
 from typing import Any, Dict, List
-from datetime import datetime
 
 import uvicorn
 import config
@@ -31,38 +30,16 @@ def fmt_uptime(secs: int) -> str:
     return f"{m}m"
 
 
-def fire_webhook(cfg: Dict[str, Any], payload: Dict[str, Any]) -> None:
-    """POST JSON to webhook_url (Discord/Telegram/generic). Best-effort."""
-    url = (cfg.get("webhook_url") or "").strip()
-    if not url:
-        return
+def get_pi_ip() -> str:
     try:
-        import requests as _req
-        body = dict(payload)
-        body.setdefault("source", "pve-node-monitor")
-        # Discord-friendly content field if not present
-        if "content" not in body and "text" not in body:
-            msg = body.get("message") or body.get("event") or "alert"
-            body["content"] = f"**PVE Monitor** · {msg}"
-        _req.post(url, json=body, timeout=4)
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
     except Exception:
-        pass
-
-
-def in_quiet_hours(cfg: Dict[str, Any]) -> bool:
-    qh = cfg.get("quiet_hours") or ""
-    if not qh or "-" not in qh:
-        return False
-    try:
-        start_s, end_s = qh.split("-", 1)
-        now_t = datetime.now().time()
-        start = datetime.strptime(start_s.strip(), "%H:%M").time()
-        end = datetime.strptime(end_s.strip(), "%H:%M").time()
-        if start <= end:
-            return start <= now_t <= end
-        return now_t >= start or now_t <= end
-    except Exception:
-        return False
+        return "?.?.?.?"
 
 def main():
     cfg = config.load_config()
@@ -98,8 +75,6 @@ def main():
     alert_cooldown = 0.0
     last_cfg_check = 0.0
     alerting = False
-    escalation_level = 0
-    prev_online: Dict[str, bool] = {}
 
     def poller():
         nonlocal all_metrics
@@ -128,7 +103,7 @@ def main():
     log.info("Web UI → http://0.0.0.0:8000")
 
     page = 0
-    TOTAL = 5
+    TOTAL = 7
     in_settings = False
     settings_idx = 0
     last_flash = time.time()
@@ -154,6 +129,8 @@ def main():
                     pass
 
             g = hw.read_gesture()
+            if g:
+                last_activity = now
             metrics = all_metrics[current_idx] if all_metrics else {"online": False, "name": "?"}
 
             if lcd_state.get("force_flash"):
@@ -242,19 +219,13 @@ def main():
                     config.save_config(cfg)
                     hw.beep(0.07)
             elif g == "SINGLE":
-                page = (page + 1) % TOTAL
+                enabled = cfg.get("lcd_pages_enabled") or list(range(TOTAL))
+                if page in enabled:
+                    idx = enabled.index(page)
+                    page = enabled[(idx + 1) % len(enabled)]
+                else:
+                    page = enabled[0] if enabled else 0
                 lcd_state["page"] = page
-            elif g == "HOLD" and alerting:
-                hw.alert_silenced = True
-                alerting = False
-                escalation_level = 0
-                hw.beep(0.15, 3)
-                try:
-                    ack_alert()
-                    log_activity("emergency_mute", "all", "hardware")
-                except Exception:
-                    pass
-                last_activity = now
             elif g == "HOLD" and not in_settings:
                 current_idx = (current_idx + 1) % max(1, len(all_metrics) or 1)
                 cfg["default_node_idx"] = current_idx
@@ -265,112 +236,43 @@ def main():
                 confirm_shutdown = False
 
             # ALERTS
-            quiet = cfg.get("quiet_mode") or in_quiet_hours(cfg)
-            if quiet:
-                hw.alert_silenced = True
-
-            # Offline / online transitions (all nodes)
-            for s in all_metrics:
-                name = s.get("name") or "?"
-                online = bool(s.get("online"))
-                was = prev_online.get(name)
-                if was is not None and was and not online:
-                    try:
-                        log_alert(name, "offline", f"{name} went offline", 0, 0)
-                        log_activity("offline", name, "system")
-                    except Exception:
-                        pass
-                    fire_webhook(cfg, {"event": "offline", "node": name, "message": f"{name} went offline"})
-                    if not quiet and not hw.alert_silenced:
-                        hw.pattern("warn")
-                elif was is not None and (not was) and online:
-                    try:
-                        log_activity("online", name, "system")
-                    except Exception:
-                        pass
-                    fire_webhook(cfg, {"event": "online", "node": name, "message": f"{name} back online"})
-                prev_online[name] = online
-
             alerting = False
             ram_pct = 0.0
-            if metrics.get("online") and not quiet:
+            if metrics.get("online") and not cfg.get("quiet_mode"):
                 ncfg = next((x for x in cfg.get("nodes", []) if x.get("name") == metrics.get("name")), {})
                 cpu_a = ncfg["cpu_alert"] if ncfg.get("cpu_alert") is not None else cfg.get("cpu_alert", 85)
                 ram_a = ncfg["ram_alert"] if ncfg.get("ram_alert") is not None else cfg.get("ram_alert", 90)
                 disk_a = ncfg["disk_alert"] if ncfg.get("disk_alert") is not None else cfg.get("disk_alert", 90)
                 ram_pct = (metrics["ram_used"] / metrics["ram_total"] * 100) if metrics.get("ram_total") else 0
-                # free disk GB (rootfs free ≈ total * (1 - pct/100))
-                disk_free_gb = None
-                if metrics.get("ram_total") is not None:  # metrics has no rootfs total; approx from pct only if we had total
-                    pass
-                # Use ram_total field pattern – disk free needs rootfs; approximate not available from current stats.
-                # disk_pct is available; disk_free_gb_alert uses inverse when we have totals from poller later.
-                # For now compute free fraction against a synthetic value only if disk_pct present:
-                disk_free_ok = True
-                free_thr = cfg.get("disk_free_gb_alert")
-                # Without absolute rootfs size in metrics, skip absolute GB check unless we extend monitor.
-                # (Phase 4 still stores the setting; GB check activates when monitor exposes free_gb.)
-
-                over = (
-                    metrics["cpu"] >= cpu_a
-                    or ram_pct >= ram_a
-                    or metrics["disk_pct"] >= disk_a
-                )
-                # Absolute free GB if monitor provided it
-                if free_thr is not None and metrics.get("disk_free_gb") is not None:
-                    try:
-                        if float(metrics["disk_free_gb"]) <= float(free_thr):
-                            over = True
-                    except Exception:
-                        pass
-
-                if over:
+                if metrics["cpu"] >= cpu_a or ram_pct >= ram_a or metrics["disk_pct"] >= disk_a:
                     alerting = True
                     repeat = cfg.get("alert_repeat_sec", 25)
                     if not hw.alert_silenced and now - alert_cooldown > repeat:
-                        use_esc = cfg.get("alert_escalation", True)
-                        if use_esc:
-                            escalation_level = min(escalation_level + 1, 3)
-                        else:
-                            escalation_level = 2
-                        if escalation_level <= 1:
-                            hw.beep(0.06, 2)
-                            hw.pattern("info")
-                        elif escalation_level == 2:
-                            hw.pattern("warn")
-                        else:
-                            hw.alert_tone()
+                        hw.alert_tone()
                         alert_cooldown = now
                         try:
-                            if free_thr is not None and metrics.get("disk_free_gb") is not None and float(metrics["disk_free_gb"]) <= float(free_thr):
-                                atype, val, thr = "disk_free", float(metrics["disk_free_gb"]), float(free_thr)
-                                msg = f"DISK FREE {val:.1f}G <= {thr}G"
-                            elif metrics["cpu"] >= cpu_a:
-                                atype, val, thr = "cpu", metrics["cpu"], cpu_a
-                                msg = f"CPU {val:.0f}% >= {thr}%"
-                            elif ram_pct >= ram_a:
-                                atype, val, thr = "ram", ram_pct, ram_a
-                                msg = f"RAM {val:.0f}% >= {thr}%"
-                            else:
-                                atype, val, thr = "disk", metrics["disk_pct"], disk_a
-                                msg = f"DISK {val:.0f}% >= {thr}%"
-                            log_alert(metrics.get("name", "?"), atype, msg, val, thr)
-                            fire_webhook(cfg, {
-                                "event": "threshold",
-                                "node": metrics.get("name"),
-                                "alert_type": atype,
-                                "message": msg,
-                                "value": val,
-                                "threshold": thr,
-                                "escalation": escalation_level,
-                            })
+                            atype = "cpu" if metrics["cpu"] >= cpu_a else ("ram" if ram_pct >= ram_a else "disk")
+                            val = metrics["cpu"] if atype == "cpu" else (ram_pct if atype == "ram" else metrics["disk_pct"])
+                            thr = cpu_a if atype == "cpu" else (ram_a if atype == "ram" else disk_a)
+                            log_alert(metrics.get("name", "?"), atype, f"{atype.upper()} {val:.0f}% >= {thr}%", val, thr)
                         except Exception:
                             pass
                 else:
                     hw.alert_silenced = False
-                    escalation_level = 0
 
             # DISPLAY
+            # Screensaver: blank after idle (0 = disabled)
+            ss = int(cfg.get("lcd_screensaver_sec") or 0)
+            if ss > 0 and not in_settings and (now - last_activity) > ss and not alerting:
+                hw.display("", "")
+                lcd_state["mode"] = "BLANK"
+                lcd_state["last_lines"] = hw.get_display_text()
+                lcd_state["page"] = page
+                lcd_state["in_settings"] = in_settings
+                lcd_state["alerting"] = False
+                time.sleep(0.05)
+                continue
+
             if in_settings:
                 if confirm_shutdown and settings_idx == 6:
                     hw.force_display("  SHUTDOWN?   ", " HOLD = send  ")
@@ -409,20 +311,29 @@ def main():
                         hw.display(" System Offline", f"{(metrics.get('name') or '')[:16]:^16}")
                     else:
                         if page == 0:
-                            hw.display(f"CPU: {metrics['cpu']:5.1f}%    ", f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G")
+                            hw.display(
+                                f"CPU: {metrics['cpu']:5.1f}%    ",
+                                f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G",
+                            )
                         elif page == 1:
-                            hw.display(f"Disk: {metrics['disk_pct']:5.1f}%   ", f"VMs : {metrics['active_vms']:3d}      ")
+                            hw.display(f"{'DISK / VMs':^16}",
+                                       f"{metrics['disk_pct']:5.1f}%   {metrics['active_vms']:2d} VMs")
                         elif page == 2:
                             up = fmt_rate(metrics["net_out"])
                             dn = fmt_rate(metrics["net_in"])
-                            hw.display(f"Up : {up}      ", f"Dn : {dn}      ")
+                            hw.display(f"{'NET  Up / Dn':^16}", f"{up} / {dn}")
                         elif page == 3:
                             uptime = fmt_uptime(metrics.get("uptime", 0))
-                            hw.display(f" Uptime {uptime:>7} ", f"{(metrics.get('name') or '')[:16]:^16}")
+                            hw.display(f"{'UPTIME':^16}", f"{uptime:^16}")
+                        elif page == 4:
+                            load1 = metrics.get("load1") or 0
+                            hw.display(f"{'LOAD 1m':^16}", f"{float(load1):^16.2f}")
+                        elif page == 5:
+                            top = metrics.get("top_vm") or "—"
+                            hw.display(f"{'TOP VM':^16}", f"{str(top)[:16]:^16}")
                         else:
-                            ip = (metrics.get("ip") or "?")[:16]
-                            ntype = (metrics.get("type") or "server")[:8]
-                            hw.display(f"{ip:<16}", f"  {ntype:^12}  ")
+                            pi = get_pi_ip()
+                            hw.display(f"{'THIS PI':^16}", f"{pi:^16}")
 
             lcd_state["last_lines"] = hw.get_display_text()
             lcd_state["page"] = page
