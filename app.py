@@ -506,6 +506,9 @@ def dashboard():
         return RedirectResponse("/setup", status_code=303)
     if cfg.get("setup_done") and not cfg.get("pins_done"):
         return RedirectResponse("/setup/pins", status_code=303)
+    return DASHBOARD_HTML("/setup", status_code=303)
+    if cfg.get("setup_done") and not cfg.get("pins_done"):
+        return RedirectResponse("/setup/pins", status_code=303)
     return DASHBOARD_HTML("/setup")
     if not cfg.get("pins_done"):
         return RedirectResponse("/setup/pins")
@@ -589,6 +592,18 @@ body.setup-page a[onclick*="showQr"] {
 }
 /* also hide the floating version text */
 body.setup-page > div:last-of-type {
+  display: none !important;
+}
+
+
+/* hide phase4 extras on setup */
+body:not(.dashboard) #pinOverlay,
+body:not(.dashboard) #qrModal,
+body:not(.dashboard) #alertHistoryModal,
+body:not(.dashboard) #bottomNav,
+body:not(.dashboard) #quickBar,
+body:not(.dashboard) a[onclick*="copyDiagnostics"],
+body:not(.dashboard) a[onclick*="showQr"] {
   display: none !important;
 }
 
@@ -756,6 +771,18 @@ body.setup-page a[onclick*="showQr"] {
 }
 /* also hide the floating version text */
 body.setup-page > div:last-of-type {
+  display: none !important;
+}
+
+
+/* hide phase4 extras on setup */
+body:not(.dashboard) #pinOverlay,
+body:not(.dashboard) #qrModal,
+body:not(.dashboard) #alertHistoryModal,
+body:not(.dashboard) #bottomNav,
+body:not(.dashboard) #quickBar,
+body:not(.dashboard) a[onclick*="copyDiagnostics"],
+body:not(.dashboard) a[onclick*="showQr"] {
   display: none !important;
 }
 
@@ -1004,9 +1031,21 @@ body.setup-page > div:last-of-type {
   display: none !important;
 }
 
+
+/* hide phase4 extras on setup */
+body:not(.dashboard) #pinOverlay,
+body:not(.dashboard) #qrModal,
+body:not(.dashboard) #alertHistoryModal,
+body:not(.dashboard) #bottomNav,
+body:not(.dashboard) #quickBar,
+body:not(.dashboard) a[onclick*="copyDiagnostics"],
+body:not(.dashboard) a[onclick*="showQr"] {
+  display: none !important;
+}
+
 </style>
 </head>
-<body>
+<body class="setup-page">
 <header>
   <div style="width:160px"></div>
   <div class="brand"><div class="desk">Desk Console</div><h1>PVE Node Monitor</h1></div>

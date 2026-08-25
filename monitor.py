@@ -22,7 +22,7 @@ class NodeClient:
         self.session.verify = False
         self.last_ok = 0.0
         self.online = False
-        self._top_cpu = -1
+        self._top_cpu = -1.0
         self._top_name = "—"
 
     def authenticate(self) -> bool:
@@ -48,7 +48,7 @@ class NodeClient:
         return {"PVEAuthCookie": self.ticket or ""}
 
     def get_stats(self) -> Optional[Dict[str, Any]]:
-        self._top_cpu = -1
+        self._top_cpu = -1.0
         self._top_name = "—"
         if not self.ticket and not self.authenticate():
             self.online = False
@@ -114,21 +114,10 @@ class NodeClient:
             self.online = True
             self.last_ok = time.time()
             return {
-                "name": self.name,
-                "ip": self.ip,
-                "node": self.node,
-                "type": self.ntype,
-                "cpu": cpu,
-                "ram_used": ram_u,
-                "ram_total": ram_t,
-                "disk_pct": disk,
-                "active_vms": active,
-                "net_in": net_in,
-                "net_out": net_out,
-                "uptime": uptime,
-                "online": True,
-                "load1": load1,
-                "top_vm": self._top_name,
+                "name": self.name, "ip": self.ip, "node": self.node, "type": self.ntype,
+                "cpu": cpu, "ram_used": ram_u, "ram_total": ram_t, "disk_pct": disk,
+                "active_vms": active, "net_in": net_in, "net_out": net_out,
+                "uptime": uptime, "online": True, "load1": load1, "top_vm": self._top_name,
             }
         except Exception as e:
             log.debug("%s stats: %s", self.name, e)
@@ -150,10 +139,9 @@ class NodeClient:
             return False
 
     def test_connection(self) -> Dict[str, Any]:
-        import time as _t
-        t0 = _t.time()
+        t0 = time.time()
         ok = self.authenticate()
-        ms = round((_t.time() - t0) * 1000)
+        ms = round((time.time() - t0) * 1000)
         return {
             "ok": ok,
             "message": "Connected" if ok else "Auth failed – check user/password/realm",
@@ -188,9 +176,7 @@ class NodeClient:
         return out
 
     def guest_power(self, vmid: int, kind: str, action: str) -> bool:
-        if kind not in ("qemu", "lxc"):
-            return False
-        if action not in ("start", "stop", "shutdown", "reboot", "suspend", "resume"):
+        if kind not in ("qemu", "lxc") or action not in ("start", "stop", "shutdown", "reboot", "suspend", "resume"):
             return False
         if not self.ticket and not self.authenticate():
             return False
@@ -208,19 +194,13 @@ class NodeClient:
 class ProxmoxManager:
     def __init__(self, nodes_cfg: List[Dict]):
         self.clients = [
-            NodeClient(
-                n["name"], n["ip"], n["node"], n["user"], n["password"],
-                n.get("type", "server")
-            )
+            NodeClient(n["name"], n["ip"], n["node"], n["user"], n["password"], n.get("type", "server"))
             for n in nodes_cfg
         ]
 
     def reload(self, nodes_cfg: List[Dict]):
         self.clients = [
-            NodeClient(
-                n["name"], n["ip"], n["node"], n["user"], n["password"],
-                n.get("type", "server")
-            )
+            NodeClient(n["name"], n["ip"], n["node"], n["user"], n["password"], n.get("type", "server"))
             for n in nodes_cfg
         ]
 
@@ -233,11 +213,9 @@ class ProxmoxManager:
             else:
                 results.append({
                     "name": c.name, "ip": c.ip, "node": c.node, "type": c.ntype,
-                    "online": False,
-                    "cpu": 0, "ram_used": 0, "ram_total": 0,
-                    "disk_pct": 0, "active_vms": 0,
-                    "net_in": 0, "net_out": 0, "uptime": 0,
-                    "load1": 0, "top_vm": "—",
+                    "online": False, "cpu": 0, "ram_used": 0, "ram_total": 0,
+                    "disk_pct": 0, "active_vms": 0, "net_in": 0, "net_out": 0,
+                    "uptime": 0, "load1": 0, "top_vm": "—",
                 })
         return results
 
