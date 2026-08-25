@@ -89,48 +89,84 @@ class HardwareManager:
         except Exception:
             self.lcd = None
 
-    def beep(self, duration=0.04, times=1):
+    def beep(self, duration=0.025, times=1):
         if not self.buzzer_enabled or self.standalone:
             return
         try:
             for _ in range(times):
                 GPIO.output(self.ACTIVE_BUZZER_PIN, GPIO.HIGH)
-                time.sleep(duration)
+                time.sleep(min(duration, 0.06))
                 GPIO.output(self.ACTIVE_BUZZER_PIN, GPIO.LOW)
-                time.sleep(0.05)
+                time.sleep(0.04)
         except Exception:
             pass
 
-    def _tone(self, freq_approx_ms, duration):
-        """Software square-wave on passive pin for a more audible tone."""
+    def _tone(self, freq_hz: float, duration: float):
+        """Clean square-wave on passive buzzer. freq_hz e.g. 440–1200."""
         if not self.passive_buzzer_enabled or self.standalone:
             return
         try:
-            half = max(0.001, freq_approx_ms / 2000.0)
-            end = time.time() + duration
+            freq = max(80.0, min(float(freq_hz), 2000.0))
+            half = 1.0 / (2.0 * freq)
+            # Cap resolution so Pi can keep up
+            half = max(half, 0.0004)
+            end = time.time() + max(0.02, duration)
+            pin = self.PASSIVE_BUZZER_PIN
             while time.time() < end:
-                GPIO.output(self.PASSIVE_BUZZER_PIN, GPIO.HIGH)
+                GPIO.output(pin, GPIO.HIGH)
                 time.sleep(half)
+                GPIO.output(pin, GPIO.LOW)
+                time.sleep(half)
+            GPIO.output(pin, GPIO.LOW)
+        except Exception:
+            try:
                 GPIO.output(self.PASSIVE_BUZZER_PIN, GPIO.LOW)
-                time.sleep(half)
+            except Exception:
+                pass
+
+    def pattern(self, name: str = "info"):
+        """Musical-ish patterns — short, distinct, not harsh."""
+        if not self.passive_buzzer_enabled or self.standalone:
+            return
+        try:
+            if name == "info":
+                self._tone(880, 0.08)
+                time.sleep(0.04)
+                self._tone(1175, 0.10)
+            elif name == "warn":
+                self._tone(660, 0.12)
+                time.sleep(0.07)
+                self._tone(660, 0.12)
+            elif name == "critical":
+                self._tone(523, 0.10)
+                time.sleep(0.04)
+                self._tone(659, 0.10)
+                time.sleep(0.04)
+                self._tone(784, 0.14)
+                time.sleep(0.08)
+                self._tone(392, 0.28)
+            elif name == "ok":
+                self._tone(523, 0.07)
+                time.sleep(0.03)
+                self._tone(784, 0.09)
+            else:
+                self._tone(700, 0.08)
         except Exception:
             pass
 
     def alert_tone(self):
-        """Clear 3-beep alarm pattern (not just clicks)."""
-        if not self.passive_buzzer_enabled or self.alert_silenced or self.standalone:
+        if self.alert_silenced or self.standalone:
             return
-        # three rising tones
-        for ms in (3.0, 2.2, 1.6):
-            self._tone(ms, 0.18)
-            time.sleep(0.08)
-        time.sleep(0.15)
-        self._tone(2.0, 0.35)
+        self.pattern("critical")
 
     def test_beep(self):
-        self.beep(0.05, 2)
-        time.sleep(0.2)
-        self.alert_tone()
+        self.beep(0.03, 1)
+        time.sleep(0.12)
+        self.pattern("info")
+        time.sleep(0.15)
+        self.pattern("warn")
+        time.sleep(0.15)
+        self.pattern("critical")
 
     def display(self, line1: str, line2: str = ""):
         l1 = f"{(line1 or '')[:16]:<16}"

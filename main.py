@@ -2,6 +2,7 @@ import time
 import threading
 import os
 from typing import Any, Dict, List
+from datetime import datetime
 
 import uvicorn
 import config
@@ -30,6 +31,40 @@ def fmt_uptime(secs: int) -> str:
     return f"{m}m"
 
 
+def fire_webhook(cfg: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    """POST JSON to webhook_url (Discord/Telegram/generic). Best-effort."""
+    url = (cfg.get("webhook_url") or "").strip()
+    if not url:
+        return
+    try:
+        import requests as _req
+        body = dict(payload)
+        body.setdefault("source", "pve-node-monitor")
+        # Discord-friendly content field if not present
+        if "content" not in body and "text" not in body:
+            msg = body.get("message") or body.get("event") or "alert"
+            body["content"] = f"**PVE Monitor** · {msg}"
+        _req.post(url, json=body, timeout=4)
+    except Exception:
+        pass
+
+
+def in_quiet_hours(cfg: Dict[str, Any]) -> bool:
+    qh = cfg.get("quiet_hours") or ""
+    if not qh or "-" not in qh:
+        return False
+    try:
+        start_s, end_s = qh.split("-", 1)
+        now_t = datetime.now().time()
+        start = datetime.strptime(start_s.strip(), "%H:%M").time()
+        end = datetime.strptime(end_s.strip(), "%H:%M").time()
+        if start <= end:
+            return start <= now_t <= end
+        return now_t >= start or now_t <= end
+    except Exception:
+        return False
+
+
 def get_pi_ip() -> str:
     try:
         import socket
@@ -40,6 +75,81 @@ def get_pi_ip() -> str:
         return ip
     except Exception:
         return "?.?.?.?"
+
+
+def lcd_center(text: str, width: int = 16) -> str:
+    t = (text or "")[:width]
+    pad = width - len(t)
+    left = pad // 2
+    return (" " * left) + t + (" " * (pad - left))
+
+
+def lcd_page_lines(page: int, metrics: dict) -> tuple:
+    """Pretty 16x2 lines for each page index."""
+    name = (metrics.get("name") or "?")[:14]
+    cpu = float(metrics.get("cpu") or 0)
+    ru = float(metrics.get("ram_used") or 0)
+    rt = float(metrics.get("ram_total") or 0)
+    disk = float(metrics.get("disk_pct") or 0)
+    vms = int(metrics.get("active_vms") or 0)
+    load1 = float(metrics.get("load1") or 0)
+    top = str(metrics.get("top_vm") or "—")[:14]
+    free = metrics.get("disk_free_gb")
+
+    if page == 0:
+        return (
+            lcd_center(f"CPU {cpu:5.1f}%"),
+            lcd_center(f"RAM {ru:.1f}/{rt:.0f}G"),
+        )
+    if page == 1:
+        free_s = f"{float(free):.0f}G free" if free is not None else f"{vms} guests"
+        return (
+            lcd_center(f"DISK {disk:4.1f}%"),
+            lcd_center(free_s),
+        )
+    if page == 2:
+        up = fmt_rate(float(metrics.get("net_out") or 0)).strip()
+        dn = fmt_rate(float(metrics.get("net_in") or 0)).strip()
+        return (
+            lcd_center("NET  UP / DN"),
+            lcd_center(f"{up} / {dn}"),
+        )
+    if page == 3:
+        return (
+            lcd_center("UPTIME"),
+            lcd_center(fmt_uptime(int(metrics.get("uptime") or 0))),
+        )
+    if page == 4:
+        return (
+            lcd_center("LOAD 1m"),
+            lcd_center(f"{load1:.2f}"),
+        )
+    if page == 5:
+        return (
+            lcd_center("TOP GUEST"),
+            lcd_center(top),
+        )
+    if page == 6:
+        return (
+            lcd_center("THIS PI"),
+            lcd_center(get_pi_ip()),
+        )
+    # fallback node info
+    return (
+        lcd_center(name),
+        lcd_center((metrics.get("ip") or "")[:16]),
+    )
+
+
+PAGE_LABELS = {
+    0: "CPU / RAM",
+    1: "Disk",
+    2: "Network",
+    3: "Uptime",
+    4: "Load",
+    5: "Top guest",
+    6: "Pi IP",
+}
 
 def main():
     cfg = config.load_config()
@@ -69,12 +179,22 @@ def main():
     hw = HardwareManager(cfg)
     pve = ProxmoxManager(cfg["nodes"])
 
+    try:
+        hw.force_display(lcd_center("PVE MONITOR"), lcd_center("starting..."))
+        time.sleep(1.0)
+        hw.force_display(lcd_center("PVE MONITOR"), lcd_center("ready"))
+        time.sleep(0.5)
+    except Exception:
+        pass
+
     all_metrics: List[Dict[str, Any]] = []
     current_idx = min(cfg.get("default_node_idx", 0), max(0, len(cfg["nodes"]) - 1))
     stop = threading.Event()
     alert_cooldown = 0.0
     last_cfg_check = 0.0
     alerting = False
+    escalation_level = 0
+    prev_online: Dict[str, bool] = {}
 
     def poller():
         nonlocal all_metrics
@@ -107,6 +227,7 @@ def main():
     in_settings = False
     settings_idx = 0
     last_flash = time.time()
+    last_auto_scroll = time.time()
     flash_active = False
     last_activity = time.time()
     confirm_shutdown = False
@@ -220,12 +341,27 @@ def main():
                     hw.beep(0.07)
             elif g == "SINGLE":
                 enabled = cfg.get("lcd_pages_enabled") or list(range(TOTAL))
+                enabled = [int(x) for x in enabled if int(x) < TOTAL]
+                if not enabled:
+                    enabled = list(range(TOTAL))
                 if page in enabled:
                     idx = enabled.index(page)
                     page = enabled[(idx + 1) % len(enabled)]
                 else:
-                    page = enabled[0] if enabled else 0
+                    page = enabled[0]
                 lcd_state["page"] = page
+                last_auto_scroll = now
+            elif g == "HOLD" and alerting:
+                hw.alert_silenced = True
+                alerting = False
+                escalation_level = 0
+                hw.beep(0.15, 3)
+                try:
+                    ack_alert()
+                    log_activity("emergency_mute", "all", "hardware")
+                except Exception:
+                    pass
+                last_activity = now
             elif g == "HOLD" and not in_settings:
                 current_idx = (current_idx + 1) % max(1, len(all_metrics) or 1)
                 cfg["default_node_idx"] = current_idx
@@ -236,39 +372,119 @@ def main():
                 confirm_shutdown = False
 
             # ALERTS
+            quiet = cfg.get("quiet_mode") or in_quiet_hours(cfg)
+            if quiet:
+                hw.alert_silenced = True
+
+            # Offline / online transitions (all nodes)
+            for s in all_metrics:
+                name = s.get("name") or "?"
+                online = bool(s.get("online"))
+                was = prev_online.get(name)
+                if was is not None and was and not online:
+                    try:
+                        log_alert(name, "offline", f"{name} went offline", 0, 0)
+                        log_activity("offline", name, "system")
+                    except Exception:
+                        pass
+                    fire_webhook(cfg, {"event": "offline", "node": name, "message": f"{name} went offline"})
+                    if not quiet and not hw.alert_silenced:
+                        hw.pattern("warn")
+                elif was is not None and (not was) and online:
+                    try:
+                        log_activity("online", name, "system")
+                    except Exception:
+                        pass
+                    fire_webhook(cfg, {"event": "online", "node": name, "message": f"{name} back online"})
+                prev_online[name] = online
+
             alerting = False
             ram_pct = 0.0
-            if metrics.get("online") and not cfg.get("quiet_mode"):
+            if metrics.get("online") and not quiet:
                 ncfg = next((x for x in cfg.get("nodes", []) if x.get("name") == metrics.get("name")), {})
                 cpu_a = ncfg["cpu_alert"] if ncfg.get("cpu_alert") is not None else cfg.get("cpu_alert", 85)
                 ram_a = ncfg["ram_alert"] if ncfg.get("ram_alert") is not None else cfg.get("ram_alert", 90)
                 disk_a = ncfg["disk_alert"] if ncfg.get("disk_alert") is not None else cfg.get("disk_alert", 90)
                 ram_pct = (metrics["ram_used"] / metrics["ram_total"] * 100) if metrics.get("ram_total") else 0
-                if metrics["cpu"] >= cpu_a or ram_pct >= ram_a or metrics["disk_pct"] >= disk_a:
+                # free disk GB (rootfs free ≈ total * (1 - pct/100))
+                disk_free_gb = None
+                if metrics.get("ram_total") is not None:  # metrics has no rootfs total; approx from pct only if we had total
+                    pass
+                # Use ram_total field pattern – disk free needs rootfs; approximate not available from current stats.
+                # disk_pct is available; disk_free_gb_alert uses inverse when we have totals from poller later.
+                # For now compute free fraction against a synthetic value only if disk_pct present:
+                disk_free_ok = True
+                free_thr = cfg.get("disk_free_gb_alert")
+                # Without absolute rootfs size in metrics, skip absolute GB check unless we extend monitor.
+                # (Phase 4 still stores the setting; GB check activates when monitor exposes free_gb.)
+
+                over = (
+                    metrics["cpu"] >= cpu_a
+                    or ram_pct >= ram_a
+                    or metrics["disk_pct"] >= disk_a
+                )
+                # Absolute free GB if monitor provided it
+                if free_thr is not None and metrics.get("disk_free_gb") is not None:
+                    try:
+                        if float(metrics["disk_free_gb"]) <= float(free_thr):
+                            over = True
+                    except Exception:
+                        pass
+
+                if over:
                     alerting = True
                     repeat = cfg.get("alert_repeat_sec", 25)
                     if not hw.alert_silenced and now - alert_cooldown > repeat:
-                        hw.alert_tone()
+                        use_esc = cfg.get("alert_escalation", True)
+                        if use_esc:
+                            escalation_level = min(escalation_level + 1, 3)
+                        else:
+                            escalation_level = 2
+                        if escalation_level <= 1:
+                            hw.beep(0.06, 2)
+                            hw.pattern("info")
+                        elif escalation_level == 2:
+                            hw.pattern("warn")
+                        else:
+                            hw.alert_tone()
                         alert_cooldown = now
                         try:
-                            atype = "cpu" if metrics["cpu"] >= cpu_a else ("ram" if ram_pct >= ram_a else "disk")
-                            val = metrics["cpu"] if atype == "cpu" else (ram_pct if atype == "ram" else metrics["disk_pct"])
-                            thr = cpu_a if atype == "cpu" else (ram_a if atype == "ram" else disk_a)
-                            log_alert(metrics.get("name", "?"), atype, f"{atype.upper()} {val:.0f}% >= {thr}%", val, thr)
+                            if free_thr is not None and metrics.get("disk_free_gb") is not None and float(metrics["disk_free_gb"]) <= float(free_thr):
+                                atype, val, thr = "disk_free", float(metrics["disk_free_gb"]), float(free_thr)
+                                msg = f"DISK FREE {val:.1f}G <= {thr}G"
+                            elif metrics["cpu"] >= cpu_a:
+                                atype, val, thr = "cpu", metrics["cpu"], cpu_a
+                                msg = f"CPU {val:.0f}% >= {thr}%"
+                            elif ram_pct >= ram_a:
+                                atype, val, thr = "ram", ram_pct, ram_a
+                                msg = f"RAM {val:.0f}% >= {thr}%"
+                            else:
+                                atype, val, thr = "disk", metrics["disk_pct"], disk_a
+                                msg = f"DISK {val:.0f}% >= {thr}%"
+                            log_alert(metrics.get("name", "?"), atype, msg, val, thr)
+                            fire_webhook(cfg, {
+                                "event": "threshold",
+                                "node": metrics.get("name"),
+                                "alert_type": atype,
+                                "message": msg,
+                                "value": val,
+                                "threshold": thr,
+                                "escalation": escalation_level,
+                            })
                         except Exception:
                             pass
                 else:
                     hw.alert_silenced = False
+                    escalation_level = 0
 
             # DISPLAY
-            # Screensaver: blank after idle (0 = disabled)
             ss = int(cfg.get("lcd_screensaver_sec") or 0)
             if ss > 0 and not in_settings and (now - last_activity) > ss and not alerting:
                 hw.display("", "")
                 lcd_state["mode"] = "BLANK"
-                lcd_state["last_lines"] = hw.get_display_text()
+                lcd_state["last_lines"] = ("", "")
                 lcd_state["page"] = page
-                lcd_state["in_settings"] = in_settings
+                lcd_state["in_settings"] = False
                 lcd_state["alerting"] = False
                 time.sleep(0.05)
                 continue
@@ -303,37 +519,37 @@ def main():
                 else:
                     flash_active = False
                     lcd_state["mode"] = "PAGES"
+
+                    # Auto-scroll through enabled pages (pauses 15s after touch)
+                    if (
+                        cfg.get("lcd_auto_scroll", True)
+                        and not in_settings
+                        and not alerting
+                        and (now - last_activity) > 15
+                    ):
+                        interval = float(cfg.get("lcd_auto_scroll_sec") or 5)
+                        # Dynamic: slightly faster when many pages enabled
+                        enabled = cfg.get("lcd_pages_enabled") or list(range(TOTAL))
+                        enabled = [int(x) for x in enabled if 0 <= int(x) < TOTAL]
+                        if not enabled:
+                            enabled = list(range(TOTAL))
+                        dyn = max(2.5, interval * (4.0 / max(4, len(enabled))))
+                        if now - last_auto_scroll >= dyn:
+                            if page in enabled:
+                                page = enabled[(enabled.index(page) + 1) % len(enabled)]
+                            else:
+                                page = enabled[0]
+                            lcd_state["page"] = page
+                            last_auto_scroll = now
+
                     if alerting and not hw.alert_silenced:
-                        # centered ALERT + one-line metrics
                         line2 = f"C{metrics['cpu']:.0f} R{ram_pct:.0f} D{metrics['disk_pct']:.0f}"
-                        hw.force_display("     ALERT     ", f"{line2:^16}")
+                        hw.force_display(lcd_center("! ALERT !"), lcd_center(line2))
                     elif not metrics.get("online"):
-                        hw.display(" System Offline", f"{(metrics.get('name') or '')[:16]:^16}")
+                        hw.display(lcd_center("OFFLINE"), lcd_center((metrics.get("name") or "?")[:16]))
                     else:
-                        if page == 0:
-                            hw.display(
-                                f"CPU: {metrics['cpu']:5.1f}%    ",
-                                f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G",
-                            )
-                        elif page == 1:
-                            hw.display(f"{'DISK / VMs':^16}",
-                                       f"{metrics['disk_pct']:5.1f}%   {metrics['active_vms']:2d} VMs")
-                        elif page == 2:
-                            up = fmt_rate(metrics["net_out"])
-                            dn = fmt_rate(metrics["net_in"])
-                            hw.display(f"{'NET  Up / Dn':^16}", f"{up} / {dn}")
-                        elif page == 3:
-                            uptime = fmt_uptime(metrics.get("uptime", 0))
-                            hw.display(f"{'UPTIME':^16}", f"{uptime:^16}")
-                        elif page == 4:
-                            load1 = metrics.get("load1") or 0
-                            hw.display(f"{'LOAD 1m':^16}", f"{float(load1):^16.2f}")
-                        elif page == 5:
-                            top = metrics.get("top_vm") or "—"
-                            hw.display(f"{'TOP VM':^16}", f"{str(top)[:16]:^16}")
-                        else:
-                            pi = get_pi_ip()
-                            hw.display(f"{'THIS PI':^16}", f"{pi:^16}")
+                        l1, l2 = lcd_page_lines(page, metrics)
+                        hw.display(l1, l2)
 
             lcd_state["last_lines"] = hw.get_display_text()
             lcd_state["page"] = page

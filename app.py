@@ -142,7 +142,8 @@ def api_get_settings():
     keys = ["buzzer_enabled","passive_buzzer_enabled","quiet_mode","compact_cards","flash_hostname",
             "log_interval","cpu_alert","disk_alert","ram_alert","theme","graph_visible","graph_range",
             "auto_refresh","standalone","has_lcd","has_touch","has_active_buzzer","has_passive_buzzer",
-            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval","density","accent"]
+            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval","density","accent",
+            "quiet_hours","disk_free_gb_alert","webhook_url","offline_sound","alert_escalation","lcd_screensaver_sec","lcd_pages_enabled","lcd_auto_scroll","lcd_auto_scroll_sec","ui_pin","theme_pack"]
     return {k: cfg.get(k) for k in keys}
 
 @app.post("/api/settings")
@@ -262,7 +263,8 @@ async def api_config_restore(request: Request):
     # merge non-sensitive
     for k in ("log_interval", "theme", "density", "cpu_alert", "ram_alert", "disk_alert",
               "graph_visible", "graph_range", "auto_refresh", "quiet_mode", "flash_hostname",
-              "alert_repeat_sec", "confirm_power", "show_net_on_card", "accent"):
+              "alert_repeat_sec", "confirm_power", "show_net_on_card", "accent",
+              "quiet_hours", "disk_free_gb_alert", "webhook_url", "offline_sound", "alert_escalation"):
         if k in data:
             cfg[k] = data[k]
     config.save_config(cfg)
@@ -386,6 +388,50 @@ def api_export_json(range: str = "1h"):
     """, (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in reversed(rows)]
+
+
+
+@app.get("/status", response_class=HTMLResponse)
+def public_status():
+    cfg = config.load_config()
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT node_name, cpu_usage, ram_used_gb, ram_total_gb, disk_pct, online, timestamp
+        FROM server_logs
+        WHERE id IN (SELECT MAX(id) FROM server_logs GROUP BY node_name)
+    """).fetchall()
+    conn.close()
+    valid = {n["name"] for n in cfg.get("nodes", [])}
+    cards = []
+    for r in rows:
+        if r["node_name"] not in valid:
+            continue
+        on = r["online"] == 1
+        cards.append(f"""<div style="padding:12px 14px;border:1px solid #333;border-radius:12px;margin:8px 0;background:#141414">
+          <b>{r['node_name']}</b> · <span style="color:{'#22c55e' if on else '#ef4444'}">{'online' if on else 'offline'}</span><br>
+          <span style="opacity:.7;font-size:.85rem">CPU {r['cpu_usage'] or 0:.0f}% · RAM {r['ram_used_gb'] or 0:.1f}/{r['ram_total_gb'] or 0:.0f}G · Disk {r['disk_pct'] or 0:.0f}%</span>
+        </div>""")
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>PVE Status</title>
+    <style>body{{background:#0a0a0a;color:#eee;font-family:system-ui;max-width:480px;margin:24px auto;padding:0 16px}}</style>
+    </head><body><h1 style="font-size:1.2rem">PVE Node Status</h1>
+    <p style="opacity:.6;font-size:.85rem">Public read-only · auto-refresh 30s</p>
+    {''.join(cards) or '<p>No nodes</p>'}
+    <script>setTimeout(()=>location.reload(),30000)</script>
+    </body></html>"""
+    return HTMLResponse(html)
+
+@app.get("/manifest.json")
+def manifest():
+    return {
+        "name": "PVE Node Monitor",
+        "short_name": "PVE Mon",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#0a0a0a",
+        "theme_color": "#0f172a",
+        "icons": []
+    }
 
 
 # -------------------- SETUP FLOW --------------------
@@ -624,7 +670,7 @@ header{background:var(--header-bg);border-bottom:1px solid var(--border);padding
 .btn-reboot{background:var(--orange);color:#fff;flex:1;padding:9px;font-size:.82rem;border-radius:8px;border:none;font-weight:600;cursor:pointer}
 .btn-shutdown{background:var(--red);color:#fff;flex:1;padding:9px;font-size:.82rem;border-radius:8px;border:none;font-weight:600;cursor:pointer}
 .btn-icon{background:transparent;border:1px solid var(--border);color:var(--muted);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center}.btn-icon:hover{color:var(--text);background:var(--hover)}
-.left-col{display:flex;flex-direction:column;min-width:0}.side-col{display:flex;flex-direction:column;gap:14px}.side-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px}
+.side-col{display:flex;flex-direction:column;gap:14px}.side-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px}
 .side-card h3{font-size:.88rem;font-weight:600;margin-bottom:2px}.side-card .sub{font-size:.72rem;color:var(--muted);margin-bottom:10px}
 .lcd-preview{background:var(--lcd-bg);color:var(--lcd-text);font-family:"Courier New",monospace;font-size:15px;line-height:1.55;padding:14px 16px;border-radius:8px;letter-spacing:1.5px;margin-bottom:10px;min-height:56px;box-shadow:inset 0 0 20px rgba(0,0,0,.55);white-space:pre}
 .lcd-btns{display:flex;gap:5px;flex-wrap:wrap}.lcd-btns button{flex:1;min-width:56px;padding:6px 3px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.72rem;font-weight:500;cursor:pointer}.lcd-btns button:hover{border-color:var(--accent);color:var(--accent)}
@@ -659,6 +705,16 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   .node-card .actions{flex-wrap:wrap}
 }
 .toast{position:fixed;bottom:68px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);color:var(--text);padding:9px 16px;border-radius:9px;font-size:.82rem;z-index:300;opacity:0;transition:opacity .25s;pointer-events:none}.toast.show{opacity:1}
+
+body.theme-cyberpunk{--accent:#ff2a6d;--purple:#05d9e8;--bg:#0d0221;--card:#1a0a2e}
+body.theme-terminal{--accent:#33ff33;--bg:#0a0a0a;--card:#111;--text:#33ff33}
+body.theme-nord{--accent:#88c0d0;--purple:#b48ead;--bg:#2e3440;--card:#3b4252}
+body.cinema .header-right,.body.cinema header .btn-ghost{opacity:.3}
+body.cinema #nodesCol,.cinema .side-col{display:none!important}
+body.cinema .graphs-wrap{position:fixed;inset:12px;z-index:60;margin:0;max-width:none}
+#bottomNav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);padding:8px 0;z-index:40;justify-content:space-around}
+@media(max-width:780px){#bottomNav{display:flex!important}body{padding-bottom:56px}}
+.left-col{display:flex;flex-direction:column;min-width:0}
 </style></head>
 <body>
 <header>
@@ -680,10 +736,8 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
     <div id="nodesCol"></div>
     <div class="side-card" id="guestCycleCard" style="margin-top:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div>
-          <h3 style="margin:0;font-size:.95rem">Guests</h3>
-          <div class="sub" style="margin:0" id="guestCycleSub">Cycling VMs / LXCs</div>
-        </div>
+        <div><h3 style="margin:0;font-size:.95rem">Guests</h3>
+        <div class="sub" style="margin:0" id="guestCycleSub">Cycling VMs / LXCs</div></div>
         <button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:.72rem" onclick="openGuestsFromCycle()">Open</button>
       </div>
       <div id="guestCycleBody" style="min-height:72px;font-size:.85rem;color:var(--muted)">Loading guests…</div>
@@ -755,6 +809,47 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
       <option value="dense">Dense</option>
     </select>
   </div>
+  <div class="set-group"><label>Theme pack</label>
+    <select class="set-input" id="sThemePack">
+      <option value="default">Default</option>
+      <option value="cyberpunk">Cyberpunk</option>
+      <option value="terminal">Terminal</option>
+      <option value="nord">Nord</option>
+    </select>
+  </div>
+  <div class="set-group"><label>UI PIN (blank = off)</label>
+    <input class="set-input" id="sPin" type="password" maxlength="8" placeholder="optional">
+  </div>
+  <div class="set-row"><div><label>LCD auto-scroll</label><div class="hint">Cycle pages when idle</div></div><button class="toggle" id="tAutoScroll" onclick="toggleSet(this,'lcd_auto_scroll')"></button></div>
+  <div class="set-group"><label>Auto-scroll interval (s)</label>
+    <input class="set-input" type="number" id="sAutoScroll" min="2" max="60" value="5">
+  </div>
+  <div class="set-group"><label>LCD screensaver (s, 0=off)</label>
+    <input class="set-input" type="number" id="sScreenSaver" min="0" max="3600" value="0">
+  </div>
+  <div class="set-group"><label>LCD pages enabled</label>
+    <div id="lcdPageChecks" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.8rem;margin-top:6px">
+      <label><input type="checkbox" data-lcdpage="0" checked> CPU/RAM</label>
+      <label><input type="checkbox" data-lcdpage="1" checked> Disk</label>
+      <label><input type="checkbox" data-lcdpage="2" checked> Network</label>
+      <label><input type="checkbox" data-lcdpage="3" checked> Uptime</label>
+      <label><input type="checkbox" data-lcdpage="4" checked> Load</label>
+      <label><input type="checkbox" data-lcdpage="5" checked> Top guest</label>
+      <label><input type="checkbox" data-lcdpage="6" checked> Pi IP</label>
+    </div>
+  </div>
+
+  <div class="set-group"><label>Quiet hours (HH:MM-HH:MM)</label>
+    <input class="set-input" id="sQuietHours" placeholder="22:00-07:00">
+  </div>
+  <div class="set-group"><label>Disk free alert (GB left)</label>
+    <input class="set-input" type="number" id="sDiskFree" placeholder="e.g. 20" min="0" step="0.5">
+  </div>
+  <div class="set-group"><label>Webhook URL</label>
+    <input class="set-input" id="sWebhook" placeholder="Discord / Telegram / generic HTTPS">
+  </div>
+  <div class="set-row"><div><label>Offline sound</label><div class="hint">Browser beep when a node drops</div></div><button class="toggle" id="tOfflineSound" onclick="toggleSet(this,'offline_sound')"></button></div>
+  <div class="set-row"><div><label>Alert escalation</label><div class="hint">Beep → warn → critical tone</div></div><button class="toggle" id="tEscalation" onclick="toggleSet(this,'alert_escalation')"></button></div>
   <div class="drawer-actions">
     <button class="btn-cancel" onclick="testBuzzer()">Test buzzer</button>
     <button class="btn-primary" onclick="saveAllSettings()">Save settings</button>
@@ -792,13 +887,13 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
   <div class="modal-actions"><div class="spacer"></div>
   <button class="btn btn-cancel" onclick="closeGuests()">Close</button></div>
 </div></div>
-<div class="modal-bg" id="bulkModal"><div class="modal" style="max-width:420px">
+<div class="modal-bg" id="bulkModal"><div class="modal">
   <h2>Bulk power</h2>
   <div class="sub">Select nodes then reboot or shutdown</div>
-  <div id="bulkList" style="max-height:280px;overflow-y:auto;margin:14px 0;display:flex;flex-direction:column;gap:6px"></div>
-  <div class="modal-actions" style="flex-wrap:wrap">
-    <button class="btn btn-reboot" style="flex:1;min-width:120px" onclick="bulkPower('reboot')">Reboot selected</button>
-    <button class="btn btn-shutdown" style="flex:1;min-width:120px" onclick="bulkPower('shutdown')">Shutdown selected</button>
+  <div id="bulkList" style="max-height:240px;overflow-y:auto;margin:12px 0"></div>
+  <div class="modal-actions">
+    <button class="btn btn-reboot" onclick="bulkPower('reboot')">Reboot selected</button>
+    <button class="btn btn-shutdown" onclick="bulkPower('shutdown')">Shutdown selected</button>
     <button class="btn btn-cancel" onclick="closeBulk()">Cancel</button>
   </div>
 </div></div>
@@ -848,6 +943,21 @@ if(document.getElementById('sAccent')){sAccent.value=settings.accent||'#3b82f6';
 sLog.value=settings.log_interval;sRefresh.value=settings.auto_refresh||5;sCpu.value=settings.cpu_alert;sDisk.value=settings.disk_alert;sRam.value=settings.ram_alert;
 if(document.getElementById('sFlashInt'))sFlashInt.value=settings.flash_interval||10;
 if(document.getElementById('sAlertRep'))sAlertRep.value=settings.alert_repeat_sec||25;
+if(document.getElementById('sAutoScroll'))sAutoScroll.value=settings.lcd_auto_scroll_sec||5;
+if(document.getElementById('sScreenSaver'))sScreenSaver.value=settings.lcd_screensaver_sec||0;
+if(document.getElementById('sPin'))sPin.value=settings.ui_pin||'';
+if(document.getElementById('sThemePack'))sThemePack.value=settings.theme_pack||'default';
+if(document.getElementById('tAutoScroll'))setToggle('tAutoScroll',settings.lcd_auto_scroll!==false);
+if(document.getElementById('sQuietHours'))sQuietHours.value=settings.quiet_hours||'';
+if(document.getElementById('sWebhook'))sWebhook.value=settings.webhook_url||'';
+(function(){const en=settings.lcd_pages_enabled||[0,1,2,3,4,5,6];document.querySelectorAll('[data-lcdpage]').forEach(cb=>{cb.checked=en.map(Number).includes(Number(cb.dataset.lcdpage));});})();
+applyThemePack(settings.theme_pack||'default');
+
+if(document.getElementById('sQuietHours'))sQuietHours.value=settings.quiet_hours||'';
+if(document.getElementById('sDiskFree'))sDiskFree.value=settings.disk_free_gb_alert!=null?settings.disk_free_gb_alert:'';
+if(document.getElementById('sWebhook'))sWebhook.value=settings.webhook_url||'';
+if(document.getElementById('tOfflineSound'))setToggle('tOfflineSound',settings.offline_sound!==false);
+if(document.getElementById('tEscalation'))setToggle('tEscalation',settings.alert_escalation!==false);
 setToggle('tNet',settings.show_net_on_card!==false);setToggle('tConfirm',settings.confirm_power!==false);
 graphVisible=settings.graph_visible||graphVisible;applyGraphVisibility();restartRefresh();
 if(settings.standalone||!settings.has_lcd){const el=document.getElementById('lcdCard');if(el)el.style.display='none'}
@@ -859,6 +969,17 @@ if(document.getElementById('sAccent')){settings.accent=sAccent.value;applyAccent
 settings.log_interval=parseInt(sLog.value)||10;settings.auto_refresh=parseInt(sRefresh.value)||5;settings.cpu_alert=parseInt(sCpu.value)||85;settings.disk_alert=parseInt(sDisk.value)||90;settings.ram_alert=parseInt(sRam.value)||90;
 if(document.getElementById('sFlashInt'))settings.flash_interval=parseInt(sFlashInt.value)||10;
 if(document.getElementById('sAlertRep'))settings.alert_repeat_sec=parseInt(sAlertRep.value)||25;
+if(document.getElementById('sAutoScroll'))settings.lcd_auto_scroll_sec=parseInt(sAutoScroll.value)||5;
+if(document.getElementById('sScreenSaver'))settings.lcd_screensaver_sec=parseInt(sScreenSaver.value)||0;
+if(document.getElementById('sPin'))settings.ui_pin=sPin.value||'';
+if(document.getElementById('sThemePack')){settings.theme_pack=sThemePack.value;applyThemePack(settings.theme_pack)}
+settings.lcd_pages_enabled=[...document.querySelectorAll('[data-lcdpage]:checked')].map(cb=>parseInt(cb.dataset.lcdpage));
+if(document.getElementById('sQuietHours'))settings.quiet_hours=sQuietHours.value.trim();
+if(document.getElementById('sWebhook'))settings.webhook_url=sWebhook.value.trim();
+
+if(document.getElementById('sQuietHours'))settings.quiet_hours=sQuietHours.value.trim();
+if(document.getElementById('sDiskFree')){const v=sDiskFree.value;settings.disk_free_gb_alert=(v===''||v==null)?null:parseFloat(v)}
+if(document.getElementById('sWebhook'))settings.webhook_url=sWebhook.value.trim();
 await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});toast('Settings saved');restartRefresh();load()}
 async function testBuzzer(){await fetch('/api/buzzer/test',{method:'POST'});toast('Buzzer test sent')}
 function backupConfig(){window.location='/api/config/backup'}
@@ -873,7 +994,19 @@ async function saveNode(){const payload={name:mName.value.trim(),ip:mIp.value.tr
 if(!payload.name||!payload.ip){toast('Name and IP required');return}
 const r=editName?await fetch('/api/nodes/'+encodeURIComponent(editName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}):await fetch('/api/nodes/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
 const j=await r.json();if(j.ok){closeAddModal();load();toast(editName?'Saved':'Node added')}else toast('Error: '+(j.error||'unknown'))}
-async function deleteNode(name){if(!confirm('Delete "'+name+'"?'))return;await fetch('/api/nodes/'+encodeURIComponent(name),{method:'DELETE'});load();toast('Deleted')}
+let pendingDelete=null;
+async function deleteNode(name){
+  if(!confirm('Delete "'+name+'"?'))return;
+  pendingDelete=name;
+  toast('Deleted — press U to undo (8s)');
+  setTimeout(async()=>{
+    if(pendingDelete===name){
+      await fetch('/api/nodes/'+encodeURIComponent(name),{method:'DELETE'});
+      pendingDelete=null;load();
+    }
+  },8000);
+}
+function undoDelete(){if(!pendingDelete)return;pendingDelete=null;load();toast('Delete cancelled')}
 function openGraphEdit(){setToggle('gCpu',graphVisible.cpu);setToggle('gRam',graphVisible.ram);setToggle('gNet',graphVisible.net);setToggle('gDisk',graphVisible.disk);graphModal.classList.add('open')}
 function closeGraphEdit(){graphModal.classList.remove('open');fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({graph_visible:graphVisible})})}
 function toggleGraph(el,key){el.classList.toggle('on');graphVisible[key]=el.classList.contains('on');applyGraphVisibility()}
@@ -889,7 +1022,7 @@ async function load(){
   nodes.forEach(n=>{const on=n.online==1;const ramPct=n.ram_total_gb?(n.ram_used_gb/n.ram_total_gb*100):0;
   const card=document.createElement('div');card.className='node-card'+(on?'':' offline');
   // offline toast
-  if(prevOnline[n.node_name]===1 && !on) toast('⚠ '+n.node_name+' went offline');
+  if(prevOnline[n.node_name]===1 && !on){toast('⚠ '+n.node_name+' went offline');playOfflineSound();}
   if(prevOnline[n.node_name]===0 && on) toast('✓ '+n.node_name+' back online');
   prevOnline[n.node_name]=on?1:0;
   const fav=n.favorite?'★':'☆';
@@ -911,72 +1044,46 @@ async function load(){
   if(lcd.alerting){alertStatus.textContent='⚠ Threshold exceeded';alertStatus.classList.add('active')}else{alertStatus.textContent='Quiet. Thresholds fire on the LCD and buzzer.';alertStatus.classList.remove('active')}}
   else if(nodes.length){const n=nodes[0];lcdPreview.textContent=`CPU: ${(n.cpu_usage||0).toFixed(1)}%    \nRAM: ${(n.ram_used_gb||0).toFixed(1)}/${(n.ram_total_gb||0).toFixed(1)}G`}
   loadCharts();
+  refreshGuestCycle();
 }
 
 let graphRange = '1h';
 let prevOnline = {};
 
 
-let guestCycleList = [];
-let guestCycleIdx = 0;
-let guestCycleNode = null;
-let guestCycleTimer = null;
-
-async function refreshGuestCycle() {
-  const body = document.getElementById('guestCycleBody');
-  const sub = document.getElementById('guestCycleSub');
-  if (!body) return;
-  const nodes = allNodesCache || [];
-  const online = nodes.filter(n => n.online == 1);
-  const target = online[0] || nodes[0];
-  if (!target) {
-    body.innerHTML = '<div style="opacity:.6">Add a node to see guests</div>';
-    guestCycleList = [];
-    return;
-  }
-  guestCycleNode = target.node_name;
-  try {
-    const r = await fetch('/api/nodes/' + encodeURIComponent(guestCycleNode) + '/guests');
-    const j = await r.json();
-    guestCycleList = (j.ok && j.guests) ? j.guests : [];
-  } catch (e) {
-    guestCycleList = [];
-  }
-  if (sub) sub.textContent = guestCycleNode + ' · ' + guestCycleList.length + ' guests';
-  if (!guestCycleList.length) {
-    body.innerHTML = '<div style="opacity:.6">No VMs or containers</div>';
-    return;
-  }
-  guestCycleIdx = guestCycleIdx % guestCycleList.length;
-  renderGuestCycle();
+function playOfflineSound(){
+  if(settings && settings.offline_sound===false) return;
+  try{
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const o=ctx.createOscillator(); const g=ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value=440; g.gain.value=0.08;
+    o.start(); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.4);
+    o.stop(ctx.currentTime+0.45);
+  }catch(e){}
 }
 
-function renderGuestCycle() {
-  const body = document.getElementById('guestCycleBody');
-  if (!body || !guestCycleList.length) return;
-  const g = guestCycleList[guestCycleIdx % guestCycleList.length];
-  const run = g.status === 'running';
-  body.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px">
-      <div style="flex:1">
-        <div style="font-weight:600;color:var(--text)">${g.name}</div>
-        <div style="font-size:.75rem;margin-top:2px">${g.type} ${g.vmid} · <span style="color:${run?'var(--green)':'var(--muted)'}">${g.status}</span></div>
-        ${run ? `<div style="font-size:.75rem;margin-top:4px;opacity:.8">CPU ${g.cpu}% · RAM ${g.mem}/${g.maxmem}G</div>` : ''}
-      </div>
-      <div style="font-size:.7rem;opacity:.5">${(guestCycleIdx%guestCycleList.length)+1}/${guestCycleList.length}</div>
-    </div>`;
-}
 
-function tickGuestCycle() {
-  if (!guestCycleList.length) return;
-  guestCycleIdx = (guestCycleIdx + 1) % guestCycleList.length;
-  renderGuestCycle();
+let guestCycleList=[],guestCycleIdx=0,guestCycleNode=null;
+async function refreshGuestCycle(){
+  const bodyEl=document.getElementById('guestCycleBody'),sub=document.getElementById('guestCycleSub');
+  if(!bodyEl)return;
+  const nodes=allNodesCache||[];
+  const target=(nodes.filter(n=>n.online==1)[0])||nodes[0];
+  if(!target){bodyEl.innerHTML='<div style="opacity:.6">Add a node to see guests</div>';guestCycleList=[];return}
+  guestCycleNode=target.node_name;
+  try{const j=await fetch('/api/nodes/'+encodeURIComponent(guestCycleNode)+'/guests').then(r=>r.json());guestCycleList=(j.ok&&j.guests)?j.guests:[]}catch(e){guestCycleList=[]}
+  if(sub)sub.textContent=guestCycleNode+' · '+guestCycleList.length+' guests';
+  if(!guestCycleList.length){bodyEl.innerHTML='<div style="opacity:.6">No VMs or containers</div>';return}
+  guestCycleIdx=guestCycleIdx%guestCycleList.length;renderGuestCycle();
 }
-
-function openGuestsFromCycle() {
-  if (guestCycleNode) openGuests(guestCycleNode);
-  else toast('No node');
+function renderGuestCycle(){
+  const bodyEl=document.getElementById('guestCycleBody');if(!bodyEl||!guestCycleList.length)return;
+  const g=guestCycleList[guestCycleIdx%guestCycleList.length],run=g.status==='running';
+  bodyEl.innerHTML=`<div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div style="font-weight:600;color:var(--text)">${g.name}</div><div style="font-size:.75rem;margin-top:2px">${g.type} ${g.vmid} · <span style="color:${run?'var(--green)':'var(--muted)'}">${g.status}</span></div>${run?`<div style="font-size:.75rem;margin-top:4px;opacity:.8">CPU ${g.cpu}% · RAM ${g.mem}/${g.maxmem}G</div>`:''}</div><div style="font-size:.7rem;opacity:.5">${(guestCycleIdx%guestCycleList.length)+1}/${guestCycleList.length}</div></div>`;
 }
+function tickGuestCycle(){if(!guestCycleList.length)return;guestCycleIdx=(guestCycleIdx+1)%guestCycleList.length;renderGuestCycle()}
+function openGuestsFromCycle(){if(guestCycleNode)openGuests(guestCycleNode);else toast('No node')}
 
 function relTime(ts) {
   if (!ts) return '—';
@@ -1049,6 +1156,44 @@ async function toggleFav(name, cur) {
   load();
 }
 
+function applyThemePack(name){
+  document.body.classList.remove('theme-cyberpunk','theme-terminal','theme-nord');
+  if(name&&name!=='default')document.body.classList.add('theme-'+name);
+}
+function toggleCinema(){document.body.classList.toggle('cinema');toast(document.body.classList.contains('cinema')?'Cinema mode':'Normal')}
+async function copyDiagnostics(){
+  const [health,settings]=await Promise.all([
+    fetch('/api/health').then(r=>r.json()).catch(()=>({})),
+    fetch('/api/settings').then(r=>r.json()).catch(()=>({}))
+  ]);
+  const txt=JSON.stringify({health,settings,ua:navigator.userAgent,ts:new Date().toISOString()},null,2);
+  await navigator.clipboard.writeText(txt);toast('Diagnostics copied');
+}
+function showQr(){
+  const box=document.getElementById('qrBox');
+  if(!box)return;
+  box.innerHTML='';
+  const img=document.createElement('img');
+  img.src='https://api.qrserver.com/v1/create-qr-code/?size=180x180&data='+encodeURIComponent(location.origin);
+  box.appendChild(img);
+  document.getElementById('qrModal').classList.add('open');
+}
+
+function checkPin(){
+  const want=(settings&&settings.ui_pin)||'';
+  if(!want){document.getElementById('pinOverlay').style.display='none';return}
+  if(document.getElementById('pinInput').value===want){
+    document.getElementById('pinOverlay').style.display='none';sessionStorage.setItem('pve_pin_ok','1');
+  } else {
+    document.getElementById('pinErr').style.display='block';
+  }
+}
+function maybePinLock(){
+  const want=(settings&&settings.ui_pin)||'';
+  if(!want||sessionStorage.getItem('pve_pin_ok')==='1')return;
+  const el=document.getElementById('pinOverlay');
+  if(el){el.style.display='flex'}
+}
 function applyDensity(d) {
   document.body.classList.remove('density-compact','density-comfortable','density-dense');
   document.body.classList.add('density-' + (d || 'comfortable'));
@@ -1060,6 +1205,8 @@ document.addEventListener('keydown', (e) => {
   if (k === 'r') { e.preventDefault(); load(); toast('Refreshed'); }
   if (k === 's') { e.preventDefault(); openSettings(); }
   if (k === 'a') { e.preventDefault(); openAddModal(); }
+  if (k === 'c') { e.preventDefault(); toggleCinema(); }
+  if (k === 'u') { e.preventDefault(); undoDelete(); }
   if (k === 'escape') { closeSettings(); closeAddModal(); closeGraphEdit(); }
 });
 
@@ -1210,8 +1357,32 @@ function applyAccent(c) {
 }
 
 function openEdit(name,ip,node,type){openAddModal(name);mName.value=name;mIp.value=ip;mNode.value=node;setType(type==='node'?'node':'server')}
-loadSettings().then(()=>{load();loadAlerts();loadActivity();});
+loadSettings().then(()=>{maybePinLock();load();loadAlerts();loadActivity();});
 setInterval(()=>{loadAlerts();loadActivity();}, 15000);
-setInterval(tickGuestCycle, 4000);
-setInterval(refreshGuestCycle, 30000);
-</script></body></html>"""
+setInterval(tickGuestCycle,4000);
+setInterval(refreshGuestCycle,30000);
+</script>
+<div style="text-align:center;padding:16px 8px 24px;opacity:.55;font-size:.75rem">
+  PVE Node Monitor v1.9.0 ·
+  <a href="#" onclick="copyDiagnostics();return false" style="color:var(--accent)">Copy diagnostics</a> ·
+  <a href="#" onclick="showQr();return false" style="color:var(--accent)">QR</a> ·
+  <a href="#" onclick="toggleCinema();return false" style="color:var(--accent)">Cinema</a>
+</div>
+<div id="qrModal" class="modal-bg"><div class="modal" style="text-align:center;max-width:280px">
+  <h2>Open on phone</h2><div id="qrBox" style="margin:12px auto"></div>
+  <button class="btn btn-cancel" onclick="document.getElementById('qrModal').classList.remove('open')">Close</button>
+</div></div>
+<nav id="bottomNav">
+  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="window.scrollTo(0,0)">Nodes</button>
+  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openSettings()">Settings</button>
+  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openAddModal()">Add</button>
+  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="toggleCinema()">Cinema</button>
+</nav>
+
+<div id="pinOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:9999;align-items:center;justify-content:center;flex-direction:column;gap:12px">
+  <div style="font-size:1.1rem;opacity:.8">Enter PIN</div>
+  <input id="pinInput" type="password" maxlength="8" style="font-size:1.4rem;text-align:center;width:140px;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:inherit" onkeydown="if(event.key==='Enter')checkPin()">
+  <button class="btn btn-primary" style="width:auto;padding:8px 20px" onclick="checkPin()">Unlock</button>
+  <div id="pinErr" style="color:#f87171;font-size:.85rem;display:none">Wrong PIN</div>
+</div>
+</body></html>"""
