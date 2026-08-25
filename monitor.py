@@ -68,6 +68,7 @@ class NodeClient:
             ram_u = round(d["memory"]["used"] / 1024**3, 1)
             ram_t = round(d["memory"]["total"] / 1024**3, 1)
             disk = round((d["rootfs"]["used"] / d["rootfs"]["total"]) * 100, 1)
+            disk_free_gb = round((d["rootfs"]["total"] - d["rootfs"]["used"]) / 1024**3, 1)
             uptime = int(d.get("uptime", 0))
 
             active = 0
@@ -103,7 +104,7 @@ class NodeClient:
                 "node": self.node,
                 "type": self.ntype,
                 "cpu": cpu, "ram_used": ram_u, "ram_total": ram_t,
-                "disk_pct": disk, "active_vms": active,
+                "disk_pct": disk, "disk_free_gb": disk_free_gb, "active_vms": active,
                 "net_in": net_in, "net_out": net_out,
                 "uptime": uptime, "online": True,
             }
@@ -208,7 +209,7 @@ class ProxmoxManager:
                     "name": c.name, "ip": c.ip, "node": c.node, "type": c.ntype,
                     "online": False,
                     "cpu": 0, "ram_used": 0, "ram_total": 0,
-                    "disk_pct": 0, "active_vms": 0,
+                    "disk_pct": 0, "disk_free_gb": 0, "active_vms": 0,
                     "net_in": 0, "net_out": 0, "uptime": 0,
                 })
         return results

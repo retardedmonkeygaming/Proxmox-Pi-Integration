@@ -116,16 +116,33 @@ class HardwareManager:
         except Exception:
             pass
 
-    def alert_tone(self):
-        """Clear 3-beep alarm pattern (not just clicks)."""
-        if not self.passive_buzzer_enabled or self.alert_silenced or self.standalone:
+    def pattern(self, name: str = "info"):
+        """Passive buzzer patterns: info / warn / critical."""
+        if not self.passive_buzzer_enabled or self.standalone:
             return
-        # three rising tones
-        for ms in (3.0, 2.2, 1.6):
-            self._tone(ms, 0.18)
-            time.sleep(0.08)
-        time.sleep(0.15)
-        self._tone(2.0, 0.35)
+        try:
+            if name == "info":
+                self._tone(2.5, 0.12)
+            elif name == "warn":
+                for _ in range(2):
+                    self._tone(2.0, 0.15)
+                    time.sleep(0.08)
+            elif name == "critical":
+                for ms in (1.8, 1.5, 1.2):
+                    self._tone(ms, 0.18)
+                    time.sleep(0.06)
+                time.sleep(0.1)
+                self._tone(1.4, 0.4)
+            else:
+                self._tone(2.2, 0.1)
+        except Exception:
+            pass
+
+    def alert_tone(self):
+        """Clear alarm pattern (critical)."""
+        if self.alert_silenced or self.standalone:
+            return
+        self.pattern("critical")
 
     def test_beep(self):
         self.beep(0.05, 2)

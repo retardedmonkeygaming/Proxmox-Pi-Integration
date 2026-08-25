@@ -142,7 +142,8 @@ def api_get_settings():
     keys = ["buzzer_enabled","passive_buzzer_enabled","quiet_mode","compact_cards","flash_hostname",
             "log_interval","cpu_alert","disk_alert","ram_alert","theme","graph_visible","graph_range",
             "auto_refresh","standalone","has_lcd","has_touch","has_active_buzzer","has_passive_buzzer",
-            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval","density","accent"]
+            "show_net_on_card","confirm_power","alert_repeat_sec","flash_interval","density","accent",
+            "quiet_hours","disk_free_gb_alert","webhook_url","offline_sound","alert_escalation"]
     return {k: cfg.get(k) for k in keys}
 
 @app.post("/api/settings")
@@ -262,7 +263,8 @@ async def api_config_restore(request: Request):
     # merge non-sensitive
     for k in ("log_interval", "theme", "density", "cpu_alert", "ram_alert", "disk_alert",
               "graph_visible", "graph_range", "auto_refresh", "quiet_mode", "flash_hostname",
-              "alert_repeat_sec", "confirm_power", "show_net_on_card", "accent"):
+              "alert_repeat_sec", "confirm_power", "show_net_on_card", "accent",
+              "quiet_hours", "disk_free_gb_alert", "webhook_url", "offline_sound", "alert_escalation"):
         if k in data:
             cfg[k] = data[k]
     config.save_config(cfg)
@@ -746,6 +748,17 @@ footer{position:fixed;bottom:0;left:0;right:0;background:var(--header-bg);border
       <option value="dense">Dense</option>
     </select>
   </div>
+  <div class="set-group"><label>Quiet hours (HH:MM-HH:MM)</label>
+    <input class="set-input" id="sQuietHours" placeholder="22:00-07:00">
+  </div>
+  <div class="set-group"><label>Disk free alert (GB left)</label>
+    <input class="set-input" type="number" id="sDiskFree" placeholder="e.g. 20" min="0" step="0.5">
+  </div>
+  <div class="set-group"><label>Webhook URL</label>
+    <input class="set-input" id="sWebhook" placeholder="Discord / Telegram / generic HTTPS">
+  </div>
+  <div class="set-row"><div><label>Offline sound</label><div class="hint">Browser beep when a node drops</div></div><button class="toggle" id="tOfflineSound" onclick="toggleSet(this,'offline_sound')"></button></div>
+  <div class="set-row"><div><label>Alert escalation</label><div class="hint">Beep → warn → critical tone</div></div><button class="toggle" id="tEscalation" onclick="toggleSet(this,'alert_escalation')"></button></div>
   <div class="drawer-actions">
     <button class="btn-cancel" onclick="testBuzzer()">Test buzzer</button>
     <button class="btn-primary" onclick="saveAllSettings()">Save settings</button>
@@ -839,6 +852,11 @@ if(document.getElementById('sAccent')){sAccent.value=settings.accent||'#3b82f6';
 sLog.value=settings.log_interval;sRefresh.value=settings.auto_refresh||5;sCpu.value=settings.cpu_alert;sDisk.value=settings.disk_alert;sRam.value=settings.ram_alert;
 if(document.getElementById('sFlashInt'))sFlashInt.value=settings.flash_interval||10;
 if(document.getElementById('sAlertRep'))sAlertRep.value=settings.alert_repeat_sec||25;
+if(document.getElementById('sQuietHours'))sQuietHours.value=settings.quiet_hours||'';
+if(document.getElementById('sDiskFree'))sDiskFree.value=settings.disk_free_gb_alert!=null?settings.disk_free_gb_alert:'';
+if(document.getElementById('sWebhook'))sWebhook.value=settings.webhook_url||'';
+if(document.getElementById('tOfflineSound'))setToggle('tOfflineSound',settings.offline_sound!==false);
+if(document.getElementById('tEscalation'))setToggle('tEscalation',settings.alert_escalation!==false);
 setToggle('tNet',settings.show_net_on_card!==false);setToggle('tConfirm',settings.confirm_power!==false);
 graphVisible=settings.graph_visible||graphVisible;applyGraphVisibility();restartRefresh();
 if(settings.standalone||!settings.has_lcd){const el=document.getElementById('lcdCard');if(el)el.style.display='none'}
@@ -850,6 +868,9 @@ if(document.getElementById('sAccent')){settings.accent=sAccent.value;applyAccent
 settings.log_interval=parseInt(sLog.value)||10;settings.auto_refresh=parseInt(sRefresh.value)||5;settings.cpu_alert=parseInt(sCpu.value)||85;settings.disk_alert=parseInt(sDisk.value)||90;settings.ram_alert=parseInt(sRam.value)||90;
 if(document.getElementById('sFlashInt'))settings.flash_interval=parseInt(sFlashInt.value)||10;
 if(document.getElementById('sAlertRep'))settings.alert_repeat_sec=parseInt(sAlertRep.value)||25;
+if(document.getElementById('sQuietHours'))settings.quiet_hours=sQuietHours.value.trim();
+if(document.getElementById('sDiskFree')){const v=sDiskFree.value;settings.disk_free_gb_alert=(v===''||v==null)?null:parseFloat(v)}
+if(document.getElementById('sWebhook'))settings.webhook_url=sWebhook.value.trim();
 await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});toast('Settings saved');restartRefresh();load()}
 async function testBuzzer(){await fetch('/api/buzzer/test',{method:'POST'});toast('Buzzer test sent')}
 function backupConfig(){window.location='/api/config/backup'}
@@ -880,7 +901,7 @@ async function load(){
   nodes.forEach(n=>{const on=n.online==1;const ramPct=n.ram_total_gb?(n.ram_used_gb/n.ram_total_gb*100):0;
   const card=document.createElement('div');card.className='node-card'+(on?'':' offline');
   // offline toast
-  if(prevOnline[n.node_name]===1 && !on) toast('⚠ '+n.node_name+' went offline');
+  if(prevOnline[n.node_name]===1 && !on){toast('⚠ '+n.node_name+' went offline');playOfflineSound();}
   if(prevOnline[n.node_name]===0 && on) toast('✓ '+n.node_name+' back online');
   prevOnline[n.node_name]=on?1:0;
   const fav=n.favorite?'★':'☆';
@@ -906,6 +927,19 @@ async function load(){
 
 let graphRange = '1h';
 let prevOnline = {};
+
+
+function playOfflineSound(){
+  if(settings && settings.offline_sound===false) return;
+  try{
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const o=ctx.createOscillator(); const g=ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value=440; g.gain.value=0.08;
+    o.start(); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.4);
+    o.stop(ctx.currentTime+0.45);
+  }catch(e){}
+}
 
 function relTime(ts) {
   if (!ts) return '—';
