@@ -237,7 +237,7 @@ def api_health():
     cfg = config.load_config()
     return {
         "ok": True,
-        "version": "1.7.0",
+        "version": "1.9.0",
         "nodes": len(cfg.get("nodes", [])),
         "standalone": cfg.get("standalone", False),
         "setup_done": cfg.get("setup_done", False),
@@ -506,109 +506,30 @@ def dashboard():
         return RedirectResponse("/setup", status_code=303)
     if cfg.get("setup_done") and not cfg.get("pins_done"):
         return RedirectResponse("/setup/pins", status_code=303)
-    return DASHBOARD_HTML("/setup", status_code=303)
-    if cfg.get("setup_done") and not cfg.get("pins_done"):
-        return RedirectResponse("/setup/pins", status_code=303)
-    return DASHBOARD_HTML("/setup")
-    if not cfg.get("pins_done"):
-        return RedirectResponse("/setup/pins")
     return DASHBOARD_HTML
 
 # -------------------- HTML --------------------
 
 SETUP_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0f172a">
-<meta name="apple-mobile-web-app-capable" content="yes">
-
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0f172a">
 <title>PVE Node Monitor – Setup</title>
 <style>
 :root{--bg:#0a0a0a;--card:#141414;--text:#f3f4f6;--muted:#9ca3af;--accent:#3b82f6;--border:#262626}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px}
 .card{background:var(--card);border-radius:16px;padding:28px;max-width:520px;width:100%;border:1px solid var(--border)}
-h1{margin:0 0 4px;font-size:1.4rem;font-weight:700}.sub{color:var(--muted);margin-bottom:20px;font-size:.88rem}
+h1{margin:0 0 4px;font-size:1.4rem;font-weight:700}
+.sub{color:var(--muted);margin-bottom:20px;font-size:.88rem}
 label{display:block;margin:12px 0 5px;font-size:.82rem;color:var(--muted);font-weight:500}
 input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(--border);background:#0a0a0a;color:var(--text);font-size:.92rem}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .btn{margin-top:20px;width:100%;padding:12px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-weight:600;font-size:1rem;cursor:pointer}
 .node-block{border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
 .add{background:transparent;border:1px dashed #4b5563;color:var(--muted);width:100%;padding:9px;border-radius:9px;cursor:pointer;margin-top:6px}
-
-@media (max-width: 780px) {
-  #bottomNav { display: flex !important; }
-  body { padding-bottom: 56px; }
-
-  .layout { flex-direction: column; }
-  #nodesCol, .side { width: 100% !important; }
-  .node-card { margin-bottom: 10px; }
-  .actions { flex-wrap: wrap; }
-  .btn-reboot, .btn-shutdown { flex: 1 1 40%; }
-  .modal-box { margin: 12px; max-width: calc(100vw - 24px); }
-  .mini-stats { gap: 6px; }
-}
-
-
-.node-card.stale .badge-on { animation: pulse-red 1.4s infinite; }
-@keyframes pulse-red {
-  0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.6); }
-  50%     { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
-}
-.node-card.stale .node-meta:last-of-type { color: #f87171 !important; }
-
-
-/* Theme packs */
-body.theme-cyberpunk { --accent:#ff2a6d; --purple:#05d9e8; --bg:#0d0221; --card:#1a0a2e; }
-body.theme-terminal  { --accent:#33ff33; --purple:#33ff99; --bg:#0a0a0a; --card:#111; color:#33ff33; }
-body.theme-nord      { --accent:#88c0d0; --purple:#b48ead; --bg:#2e3440; --card:#3b4252; }
-body.cinema .topbar, body.cinema .side, body.cinema #nodesCol { display:none !important; }
-body.cinema .graphs { position:fixed; inset:0; z-index:50; background:var(--bg); padding:12px; }
-
-
-body.guest-mode .actions button:not(.btn-icon),
-body.guest-mode .btn-reboot,
-body.guest-mode .btn-shutdown { display: none !important; }
-body.guest-mode #bottomNav { display: none !important; }
-
-body.setup-page #alertHistoryModal,
-body.setup-page #qrModal,
-body.setup-page #pinOverlay,
-body.setup-page #bottomNav,
-body.setup-page #quickBar,
-body.setup-page .footer-diag {
-  display: none !important;
-}
-
-body.setup-page #alertHistoryModal,
-body.setup-page #qrModal,
-body.setup-page #pinOverlay,
-body.setup-page #bottomNav,
-body.setup-page #quickBar,
-body.setup-page .footer-diag,
-body.setup-page a[onclick*="copyDiagnostics"],
-body.setup-page a[onclick*="showQr"] {
-  display: none !important;
-}
-/* also hide the floating version text */
-body.setup-page > div:last-of-type {
-  display: none !important;
-}
-
-
-/* hide phase4 extras on setup */
-body:not(.dashboard) #pinOverlay,
-body:not(.dashboard) #qrModal,
-body:not(.dashboard) #alertHistoryModal,
-body:not(.dashboard) #bottomNav,
-body:not(.dashboard) #quickBar,
-body:not(.dashboard) a[onclick*="copyDiagnostics"],
-body:not(.dashboard) a[onclick*="showQr"] {
-  display: none !important;
-}
-
 </style>
-</head><body class=\"setup-page\">
+</head><body>
 <div class="card">
 <h1>PVE Node Monitor</h1>
 <p class="sub">Step 1 · Add your Proxmox nodes</p>
@@ -636,73 +557,20 @@ function addNode(){document.getElementById('nodes').insertAdjacentHTML('beforeen
 <div class="row"><div><label>User</label><input name="user_${idx}" value="root@pam"></div>
 <div><label>Password</label><input name="password_${idx}" type="password" required></div></div></div>`);idx++}
 </script>
-<div id="quickBar" style="display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
-  background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 16px;
-  box-shadow:0 8px 30px rgba(0,0,0,.45);z-index:100;gap:10px;align-items:center">
-  <span id="quickCount" style="font-size:.85rem;opacity:.8">0 selected</span>
-  <button class="btn-reboot" style="padding:6px 12px" onclick="quickPower('reboot')">Reboot</button>
-  <button class="btn-shutdown" style="padding:6px 12px" onclick="quickPower('shutdown')">Shutdown</button>
-  <button class="btn btn-ghost" style="padding:6px 10px" onclick="clearQuick()">Clear</button>
-</div>
-
-
-<div id="alertHistoryModal" class="modal">
-  <div class="modal-box" style="max-width:480px;max-height:80vh;overflow:auto">
-    <h3>Alert history</h3>
-    <div id="alertHistoryList" style="font-size:.85rem"></div>
-    <button class="btn btn-ghost" style="margin-top:12px" onclick="closeAlertHistory()">Close</button>
-  </div>
-</div>
-
-
-<div id="pinOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;
-  align-items:center;justify-content:center;flex-direction:column;gap:12px">
-  <div style="font-size:1.1rem;opacity:.8">Enter PIN</div>
-  <input id="pinInput" type="password" maxlength="8" style="font-size:1.4rem;text-align:center;width:140px;
-    padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:inherit"
-    onkeydown="if(event.key==='Enter')checkPin()">
-  <button class="btn btn-primary" onclick="checkPin()">Unlock</button>
-  <div id="pinErr" style="color:#f87171;font-size:.85rem;display:none">Wrong PIN</div>
-</div>
-
-
-<div style="text-align:center;padding:16px 8px 24px;opacity:.55;font-size:.75rem">
-  PVE Node Monitor <span id="verLabel">v1.9.0</span> ·
-  <a href="#" onclick="copyDiagnostics();return false" style="color:var(--accent)">Copy diagnostics</a> ·
-  <a href="#" onclick="showQr();return false" style="color:var(--accent)">QR</a>
-</div>
-<div id="qrModal" class="modal">
-  <div class="modal-box" style="text-align:center;max-width:280px">
-    <h3>Open on phone</h3>
-    <div id="qrBox" style="margin:12px auto"></div>
-    <button class="btn btn-ghost" onclick="document.getElementById('qrModal').classList.remove('open')">Close</button>
-  </div>
-</div>
-
-
-<nav id="bottomNav" style="display:none;position:fixed;bottom:0;left:0;right:0;background:var(--card);
-  border-top:1px solid var(--border);padding:8px 0;z-index:40;justify-content:space-around">
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="window.scrollTo(0,0)">Nodes</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openSettings()">Settings</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openAddModal()">Add</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="toggleCinema()">Cinema</button>
-</nav>
-
 </body></html>"""
 
 PINS_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0f172a">
-<meta name="apple-mobile-web-app-capable" content="yes">
-
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0f172a">
 <title>PVE Node Monitor – Pin Layout</title>
 <style>
 :root{--bg:#0a0a0a;--card:#141414;--text:#f3f4f6;--muted:#9ca3af;--accent:#3b82f6;--border:#262626}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px}
 .card{background:var(--card);border-radius:16px;padding:28px;max-width:540px;width:100%;border:1px solid var(--border)}
-h1{margin:0 0 4px;font-size:1.4rem;font-weight:700}.sub{color:var(--muted);margin-bottom:20px;font-size:.88rem}
+h1{margin:0 0 4px;font-size:1.4rem;font-weight:700}
+.sub{color:var(--muted);margin-bottom:20px;font-size:.88rem}
 label{display:block;margin:10px 0 4px;font-size:.82rem;color:var(--muted);font-weight:500}
 input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(--border);background:#0a0a0a;color:var(--text);font-size:.92rem}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -714,80 +582,8 @@ input,select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(
 .pin-fields{display:none}.pin-fields.show{display:block}
 .hint{font-size:.75rem;color:var(--muted);margin-top:4px}
 .dim{opacity:.35;pointer-events:none;filter:grayscale(1)}
-
-@media (max-width: 780px) {
-  #bottomNav { display: flex !important; }
-  body { padding-bottom: 56px; }
-
-  .layout { flex-direction: column; }
-  #nodesCol, .side { width: 100% !important; }
-  .node-card { margin-bottom: 10px; }
-  .actions { flex-wrap: wrap; }
-  .btn-reboot, .btn-shutdown { flex: 1 1 40%; }
-  .modal-box { margin: 12px; max-width: calc(100vw - 24px); }
-  .mini-stats { gap: 6px; }
-}
-
-
-.node-card.stale .badge-on { animation: pulse-red 1.4s infinite; }
-@keyframes pulse-red {
-  0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.6); }
-  50%     { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
-}
-.node-card.stale .node-meta:last-of-type { color: #f87171 !important; }
-
-
-/* Theme packs */
-body.theme-cyberpunk { --accent:#ff2a6d; --purple:#05d9e8; --bg:#0d0221; --card:#1a0a2e; }
-body.theme-terminal  { --accent:#33ff33; --purple:#33ff99; --bg:#0a0a0a; --card:#111; color:#33ff33; }
-body.theme-nord      { --accent:#88c0d0; --purple:#b48ead; --bg:#2e3440; --card:#3b4252; }
-body.cinema .topbar, body.cinema .side, body.cinema #nodesCol { display:none !important; }
-body.cinema .graphs { position:fixed; inset:0; z-index:50; background:var(--bg); padding:12px; }
-
-
-body.guest-mode .actions button:not(.btn-icon),
-body.guest-mode .btn-reboot,
-body.guest-mode .btn-shutdown { display: none !important; }
-body.guest-mode #bottomNav { display: none !important; }
-
-body.setup-page #alertHistoryModal,
-body.setup-page #qrModal,
-body.setup-page #pinOverlay,
-body.setup-page #bottomNav,
-body.setup-page #quickBar,
-body.setup-page .footer-diag {
-  display: none !important;
-}
-
-body.setup-page #alertHistoryModal,
-body.setup-page #qrModal,
-body.setup-page #pinOverlay,
-body.setup-page #bottomNav,
-body.setup-page #quickBar,
-body.setup-page .footer-diag,
-body.setup-page a[onclick*="copyDiagnostics"],
-body.setup-page a[onclick*="showQr"] {
-  display: none !important;
-}
-/* also hide the floating version text */
-body.setup-page > div:last-of-type {
-  display: none !important;
-}
-
-
-/* hide phase4 extras on setup */
-body:not(.dashboard) #pinOverlay,
-body:not(.dashboard) #qrModal,
-body:not(.dashboard) #alertHistoryModal,
-body:not(.dashboard) #bottomNav,
-body:not(.dashboard) #quickBar,
-body:not(.dashboard) a[onclick*="copyDiagnostics"],
-body:not(.dashboard) a[onclick*="showQr"] {
-  display: none !important;
-}
-
 </style>
-</head><body class=\"setup-page\">
+</head><body>
 <div class="card">
 <h1>Pin Layout</h1>
 <p class="sub">Step 2 · Components & GPIO pins</p>
@@ -850,58 +646,6 @@ function togMode(){
 }
 sync();
 </script>
-<div id="quickBar" style="display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
-  background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 16px;
-  box-shadow:0 8px 30px rgba(0,0,0,.45);z-index:100;gap:10px;align-items:center">
-  <span id="quickCount" style="font-size:.85rem;opacity:.8">0 selected</span>
-  <button class="btn-reboot" style="padding:6px 12px" onclick="quickPower('reboot')">Reboot</button>
-  <button class="btn-shutdown" style="padding:6px 12px" onclick="quickPower('shutdown')">Shutdown</button>
-  <button class="btn btn-ghost" style="padding:6px 10px" onclick="clearQuick()">Clear</button>
-</div>
-
-
-<div id="alertHistoryModal" class="modal">
-  <div class="modal-box" style="max-width:480px;max-height:80vh;overflow:auto">
-    <h3>Alert history</h3>
-    <div id="alertHistoryList" style="font-size:.85rem"></div>
-    <button class="btn btn-ghost" style="margin-top:12px" onclick="closeAlertHistory()">Close</button>
-  </div>
-</div>
-
-
-<div id="pinOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;
-  align-items:center;justify-content:center;flex-direction:column;gap:12px">
-  <div style="font-size:1.1rem;opacity:.8">Enter PIN</div>
-  <input id="pinInput" type="password" maxlength="8" style="font-size:1.4rem;text-align:center;width:140px;
-    padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:inherit"
-    onkeydown="if(event.key==='Enter')checkPin()">
-  <button class="btn btn-primary" onclick="checkPin()">Unlock</button>
-  <div id="pinErr" style="color:#f87171;font-size:.85rem;display:none">Wrong PIN</div>
-</div>
-
-
-<div style="text-align:center;padding:16px 8px 24px;opacity:.55;font-size:.75rem">
-  PVE Node Monitor <span id="verLabel">v1.9.0</span> ·
-  <a href="#" onclick="copyDiagnostics();return false" style="color:var(--accent)">Copy diagnostics</a> ·
-  <a href="#" onclick="showQr();return false" style="color:var(--accent)">QR</a>
-</div>
-<div id="qrModal" class="modal">
-  <div class="modal-box" style="text-align:center;max-width:280px">
-    <h3>Open on phone</h3>
-    <div id="qrBox" style="margin:12px auto"></div>
-    <button class="btn btn-ghost" onclick="document.getElementById('qrModal').classList.remove('open')">Close</button>
-  </div>
-</div>
-
-
-<nav id="bottomNav" style="display:none;position:fixed;bottom:0;left:0;right:0;background:var(--card);
-  border-top:1px solid var(--border);padding:8px 0;z-index:40;justify-content:space-around">
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="window.scrollTo(0,0)">Nodes</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openSettings()">Settings</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="openAddModal()">Add</button>
-  <button class="btn btn-ghost" style="flex:1;font-size:.7rem" onclick="toggleCinema()">Cinema</button>
-</nav>
-
 </body></html>"""
 
 # Dashboard – reuse previous polished version (abbreviated key parts, full in file)
