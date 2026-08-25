@@ -84,61 +84,51 @@ def lcd_center(text: str, width: int = 16) -> str:
     return (" " * left) + t + (" " * (pad - left))
 
 
+def lcd_lr(left: str, right: str, width: int = 16) -> str:
+    """Label left, value right — classic 1602 look."""
+    left = (left or "")[:width]
+    right = (right or "")[:width]
+    space = width - len(left) - len(right)
+    if space < 1:
+        # shrink right to fit
+        right = right[:(width - len(left) - 1)]
+        space = width - len(left) - len(right)
+    return left + (" " * max(space, 1)) + right
+
+
 def lcd_page_lines(page: int, metrics: dict) -> tuple:
-    """Pretty 16x2 lines for each page index."""
-    name = (metrics.get("name") or "?")[:14]
+    """Readable 16x2 pages for HD44780."""
+    name = (metrics.get("name") or "?")[:12]
     cpu = float(metrics.get("cpu") or 0)
     ru = float(metrics.get("ram_used") or 0)
     rt = float(metrics.get("ram_total") or 0)
     disk = float(metrics.get("disk_pct") or 0)
     vms = int(metrics.get("active_vms") or 0)
     load1 = float(metrics.get("load1") or 0)
-    top = str(metrics.get("top_vm") or "—")[:14]
+    top = str(metrics.get("top_vm") or "-")[:12]
     free = metrics.get("disk_free_gb")
+    up = fmt_rate(float(metrics.get("net_out") or 0)).strip()
+    dn = fmt_rate(float(metrics.get("net_in") or 0)).strip()
 
     if page == 0:
         return (
-            lcd_center(f"CPU {cpu:5.1f}%"),
-            lcd_center(f"RAM {ru:.1f}/{rt:.0f}G"),
+            lcd_lr("CPU", f"{cpu:.1f}%"),
+            lcd_lr("RAM", f"{ru:.1f}/{rt:.0f}G"),
         )
     if page == 1:
-        free_s = f"{float(free):.0f}G free" if free is not None else f"{vms} guests"
-        return (
-            lcd_center(f"DISK {disk:4.1f}%"),
-            lcd_center(free_s),
-        )
+        line2 = lcd_lr("FREE", f"{float(free):.0f}G") if free is not None else lcd_lr("GUESTS", str(vms))
+        return (lcd_lr("DISK", f"{disk:.1f}%"), line2)
     if page == 2:
-        up = fmt_rate(float(metrics.get("net_out") or 0)).strip()
-        dn = fmt_rate(float(metrics.get("net_in") or 0)).strip()
-        return (
-            lcd_center("NET  UP / DN"),
-            lcd_center(f"{up} / {dn}"),
-        )
+        return (lcd_lr("UP", up), lcd_lr("DN", dn))
     if page == 3:
-        return (
-            lcd_center("UPTIME"),
-            lcd_center(fmt_uptime(int(metrics.get("uptime") or 0))),
-        )
+        return (lcd_center("UPTIME"), lcd_center(fmt_uptime(int(metrics.get("uptime") or 0))))
     if page == 4:
-        return (
-            lcd_center("LOAD 1m"),
-            lcd_center(f"{load1:.2f}"),
-        )
+        return (lcd_center("LOAD 1m"), lcd_center(f"{load1:.2f}"))
     if page == 5:
-        return (
-            lcd_center("TOP GUEST"),
-            lcd_center(top),
-        )
+        return (lcd_center("TOP VM"), lcd_center(top))
     if page == 6:
-        return (
-            lcd_center("THIS PI"),
-            lcd_center(get_pi_ip()),
-        )
-    # fallback node info
-    return (
-        lcd_center(name),
-        lcd_center((metrics.get("ip") or "")[:16]),
-    )
+        return (lcd_center("THIS PI"), lcd_center(get_pi_ip()))
+    return (lcd_center(name), lcd_center((metrics.get("ip") or "")[:16]))
 
 
 PAGE_LABELS = {
@@ -544,7 +534,7 @@ def main():
 
                     if alerting and not hw.alert_silenced:
                         line2 = f"C{metrics['cpu']:.0f} R{ram_pct:.0f} D{metrics['disk_pct']:.0f}"
-                        hw.force_display(lcd_center("! ALERT !"), lcd_center(line2))
+                        hw.force_display(lcd_center("* ALERT *"), lcd_center(line2))
                     elif not metrics.get("online"):
                         hw.display(lcd_center("OFFLINE"), lcd_center((metrics.get("name") or "?")[:16]))
                     else:

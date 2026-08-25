@@ -403,23 +403,87 @@ def public_status():
     conn.close()
     valid = {n["name"] for n in cfg.get("nodes", [])}
     cards = []
+    online_n = 0
+    total_n = 0
     for r in rows:
         if r["node_name"] not in valid:
             continue
+        total_n += 1
         on = r["online"] == 1
-        cards.append(f"""<div style="padding:12px 14px;border:1px solid #333;border-radius:12px;margin:8px 0;background:#141414">
-          <b>{r['node_name']}</b> · <span style="color:{'#22c55e' if on else '#ef4444'}">{'online' if on else 'offline'}</span><br>
-          <span style="opacity:.7;font-size:.85rem">CPU {r['cpu_usage'] or 0:.0f}% · RAM {r['ram_used_gb'] or 0:.1f}/{r['ram_total_gb'] or 0:.0f}G · Disk {r['disk_pct'] or 0:.0f}%</span>
-        </div>""")
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>PVE Status</title>
-    <style>body{{background:#0a0a0a;color:#eee;font-family:system-ui;max-width:480px;margin:24px auto;padding:0 16px}}</style>
-    </head><body><h1 style="font-size:1.2rem">PVE Node Status</h1>
-    <p style="opacity:.6;font-size:.85rem">Public read-only · auto-refresh 30s</p>
-    {''.join(cards) or '<p>No nodes</p>'}
-    <script>setTimeout(()=>location.reload(),30000)</script>
-    </body></html>"""
+        if on:
+            online_n += 1
+        cpu = float(r["cpu_usage"] or 0)
+        ram_u = float(r["ram_used_gb"] or 0)
+        ram_t = float(r["ram_total_gb"] or 0)
+        disk = float(r["disk_pct"] or 0)
+        ram_pct = (ram_u / ram_t * 100) if ram_t else 0
+        cards.append(f"""
+        <article class="card">
+          <div class="card-top">
+            <div class="name">{r['node_name']}</div>
+            <span class="badge {'on' if on else 'off'}">{'ONLINE' if on else 'OFFLINE'}</span>
+          </div>
+          <div class="bars">
+            <div class="row"><span>CPU</span><span>{cpu:.0f}%</span></div>
+            <div class="bar"><i style="width:{min(cpu,100)}%"></i></div>
+            <div class="row"><span>RAM</span><span>{ram_u:.1f}/{ram_t:.0f}G</span></div>
+            <div class="bar ram"><i style="width:{min(ram_pct,100)}%"></i></div>
+            <div class="row"><span>DISK</span><span>{disk:.0f}%</span></div>
+            <div class="bar disk"><i style="width:{min(disk,100)}%"></i></div>
+          </div>
+        </article>""")
+    body_cards = "".join(cards) if cards else '<p class="empty">No nodes configured</p>'
+    html = f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<title>PVE Node Status</title>
+<style>
+  :root {{ --bg:#0b0f14; --card:#141a22; --text:#e8eef7; --muted:#8b9bb0; --border:#243041;
+           --accent:#3b82f6; --green:#22c55e; --red:#ef4444; --purple:#a855f7; --orange:#f97316; }}
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ min-height:100vh; background:radial-gradient(1200px 600px at 50% -10%, #152033 0%, var(--bg) 55%);
+         color:var(--text); font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;
+         padding:28px 16px 40px; }}
+  .wrap {{ max-width:560px; margin:0 auto; }}
+  header {{ text-align:center; margin-bottom:22px; }}
+  header h1 {{ font-size:1.35rem; font-weight:700; letter-spacing:-.02em; }}
+  header p {{ color:var(--muted); font-size:.82rem; margin-top:6px; }}
+  .summary {{ display:flex; gap:10px; margin-bottom:16px; }}
+  .summary .pill {{ flex:1; background:var(--card); border:1px solid var(--border); border-radius:12px;
+                    padding:12px; text-align:center; }}
+  .summary .pill b {{ display:block; font-size:1.35rem; }}
+  .summary .pill span {{ font-size:.72rem; color:var(--muted); }}
+  .card {{ background:var(--card); border:1px solid var(--border); border-radius:14px;
+           padding:14px 16px; margin-bottom:12px; }}
+  .card-top {{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }}
+  .name {{ font-weight:650; font-size:1rem; }}
+  .badge {{ font-size:.68rem; font-weight:700; letter-spacing:.04em; padding:3px 8px; border-radius:999px; }}
+  .badge.on {{ background:rgba(34,197,94,.15); color:var(--green); }}
+  .badge.off {{ background:rgba(239,68,68,.15); color:var(--red); }}
+  .row {{ display:flex; justify-content:space-between; font-size:.78rem; color:var(--muted); margin-top:8px; }}
+  .bar {{ height:6px; background:#0a0e14; border-radius:99px; overflow:hidden; margin-top:4px; }}
+  .bar i {{ display:block; height:100%; background:var(--accent); border-radius:99px; }}
+  .bar.ram i {{ background:var(--purple); }}
+  .bar.disk i {{ background:var(--orange); }}
+  .empty {{ text-align:center; color:var(--muted); padding:24px; }}
+  footer {{ text-align:center; margin-top:18px; font-size:.72rem; color:var(--muted); }}
+</style></head><body>
+<div class="wrap">
+  <header>
+    <h1>PVE Node Status</h1>
+    <p>Public read-only · refreshes every 30s</p>
+  </header>
+  <div class="summary">
+    <div class="pill"><b>{online_n}/{total_n}</b><span>Online</span></div>
+    <div class="pill"><b>{total_n}</b><span>Nodes</span></div>
+  </div>
+  {body_cards}
+  <footer>PVE Node Monitor</footer>
+</div>
+</body></html>"""
     return HTMLResponse(html)
+
 
 @app.get("/manifest.json")
 def manifest():
@@ -434,15 +498,49 @@ def manifest():
     }
 
 
+
+@app.post("/api/pin/fail")
+def api_pin_fail():
+    """Track failed PIN attempts; after 5, wipe config.json (factory reset)."""
+    import os
+    path = "/tmp/pve_pin_fails"
+    try:
+        n = int(open(path).read().strip() or "0")
+    except Exception:
+        n = 0
+    n += 1
+    try:
+        open(path, "w").write(str(n))
+    except Exception:
+        pass
+    if n >= 5:
+        try:
+            if os.path.exists("config.json"):
+                os.remove("config.json")
+            os.remove(path)
+        except Exception:
+            pass
+        return {"ok": True, "wiped": True, "fails": n}
+    return {"ok": True, "wiped": False, "fails": n, "left": 5 - n}
+
+@app.post("/api/pin/ok")
+def api_pin_ok():
+    try:
+        open("/tmp/pve_pin_fails", "w").write("0")
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 # -------------------- SETUP FLOW --------------------
 
 @app.get("/setup", response_class=HTMLResponse)
 def setup_page():
     cfg = config.load_config()
     if cfg.get("setup_done") and cfg.get("pins_done") and cfg.get("nodes"):
-        return RedirectResponse("/")
+        return RedirectResponse("/", status_code=303)
     if cfg.get("setup_done") and not cfg.get("pins_done"):
-        return RedirectResponse("/setup/pins")
+        return RedirectResponse("/setup/pins", status_code=303)
     return SETUP_HTML
 
 @app.post("/setup")
@@ -506,10 +604,11 @@ async def setup_pins_submit(request: Request):
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     cfg = config.load_config()
-    if not cfg.get("setup_done") or not cfg.get("nodes"):
-        return RedirectResponse("/setup")
+    nodes = cfg.get("nodes") or []
+    if not cfg.get("setup_done") or not nodes:
+        return RedirectResponse("/setup", status_code=303)
     if not cfg.get("pins_done"):
-        return RedirectResponse("/setup/pins")
+        return RedirectResponse("/setup/pins", status_code=303)
     return DASHBOARD_HTML
 
 # -------------------- HTML --------------------
@@ -1179,13 +1278,28 @@ function showQr(){
   document.getElementById('qrModal').classList.add('open');
 }
 
-function checkPin(){
+async function checkPin(){
   const want=(settings&&settings.ui_pin)||'';
   if(!want){document.getElementById('pinOverlay').style.display='none';return}
   if(document.getElementById('pinInput').value===want){
-    document.getElementById('pinOverlay').style.display='none';sessionStorage.setItem('pve_pin_ok','1');
+    document.getElementById('pinOverlay').style.display='none';
+    sessionStorage.setItem('pve_pin_ok','1');
+    fetch('/api/pin/ok',{method:'POST'}).catch(()=>{});
   } else {
     document.getElementById('pinErr').style.display='block';
+    try{
+      const j=await fetch('/api/pin/fail',{method:'POST'}).then(r=>r.json());
+      if(j.wiped){
+        document.getElementById('pinErr').textContent='Too many attempts — config wiped. Reloading…';
+        sessionStorage.removeItem('pve_pin_ok');
+        setTimeout(()=>location.href='/setup',1200);
+      } else {
+        document.getElementById('pinErr').textContent='Wrong PIN ('+(j.left||0)+' left)';
+      }
+    }catch(e){
+      document.getElementById('pinErr').textContent='Wrong PIN';
+    }
+    document.getElementById('pinInput').value='';
   }
 }
 function maybePinLock(){
