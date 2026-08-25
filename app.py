@@ -789,7 +789,7 @@ body:not(.dashboard) a[onclick*="showQr"] {
 
 </style>
 </head>
-<body class="setup-page">
+<body class="dashboard">
 <header>
   <div style="width:160px"></div>
   <div class="brand"><div class="desk">Desk Console</div><h1>PVE Node Monitor</h1></div>
@@ -801,7 +801,8 @@ body:not(.dashboard) a[onclick*="showQr"] {
     <span class="pill" id="onlinePill">–/– online</span>
     <button class="btn btn-primary" onclick="openAddModal()">+ Add node / server</button>
     <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openBulk()" title="Bulk power">Bulk</button>
-    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openImport()" title="Import"> Discover</button><button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:.75rem" onclick="openDiscover()">Import</button>
+    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openDiscover()" title="Discover">Discover</button>
+    <button class="btn btn-ghost" style="width:auto;padding:7px 10px;font-size:.78rem" onclick="openImport()" title="Import">Import</button>
     <button class="btn-ghost" onclick="openSettings()" title="Settings">⚙</button>
     <button class="btn-ghost" id="themeBtn" onclick="toggleTheme()" title="Theme">☾</button>
     <button class="btn-ghost" onclick="load()" title="Refresh">↻</button>
@@ -825,10 +826,9 @@ body:not(.dashboard) a[onclick*="showQr"] {
     <div class="side-card">
       <h3>Alerts <button class="btn btn-ghost" style="float:right;width:auto;padding:2px 8px;font-size:.7rem" onclick="ackAll()">Ack all</button></h3>
       <div class="alert-box" id="alertStatus">Quiet. Thresholds fire on the LCD and buzzer.</div>
-      <div 
-<button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:.75rem;margin-left:6px"
+      <button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:.75rem;margin:6px 0"
         onclick="openAlertHistory()">History</button>
-id="alertList" style="margin-top:8px;font-size:.72rem;color:var(--muted);max-height:100px;overflow-y:auto"></div>
+      <div id="alertList" style="margin-top:8px;font-size:.72rem;color:var(--muted);max-height:100px;overflow-y:auto"></div>
     </div>
     <div class="side-card">
       <h3>Activity</h3>
@@ -846,10 +846,9 @@ id="alertList" style="margin-top:8px;font-size:.72rem;color:var(--muted);max-hei
   </div>
 </div>
   </div>
+  <div id="bigStats" style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 12px;grid-column:1/-1"></div>
   <div class="graphs-wrap">
-    <div class="graphs-head"><div><h2>
-<div id="bigStats" style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 12px"></div>
-Graphs</h2><div class="sub">Live samples from the active node</div></div>
+    <div class="graphs-head"><div><h2>Graphs</h2><div class="sub">Live samples from the active node</div></div>
       <div style="display:flex;gap:6px;align-items:center">
         <select id="graphRange" onchange="changeRange()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:.78rem">
           <option value="1h">1h</option><option value="6h">6h</option><option value="24h">24h</option><option value="7d">7d</option>
@@ -1140,7 +1139,7 @@ async function power(name, action) {
   const r = await fetch('/api/power/' + encodeURIComponent(name) + '/' + action, {method:'POST'});
   const j = await r.json();
   toast(j.ok ? action + ' sent' : 'Failed');
-});const j=await r.json();toast(j.ok?action+' sent':'Failed')}
+}
 function restartRefresh(){if(refreshTimer)clearInterval(refreshTimer);refreshTimer=setInterval(load,(settings.auto_refresh||5)*1000)}
 
 async function sendWebhook(payload) {
@@ -1230,7 +1229,6 @@ async function exportGraphsPng() {
 
 function changeRange() {
   graphRange = document.getElementById('graphRange').value;
-  await renderBigStats(nodes); renderTagChips(nodes);
   loadCharts();
 }
 
@@ -1378,7 +1376,7 @@ async function openGuestsForActive() {
   if (n) openGuests(n.node_name);
   else toast('No nodes');
 }
-function openGuests(name) {
+async function openGuests(name) {
   guestTitle.textContent = name + ' — Guests';
   guestList.innerHTML = 'Loading…';
   guestModal.classList.add('open');
@@ -1407,7 +1405,6 @@ async function guestAct(node, vmid, kind, action) {
 }
 
 let bulkNodes = [];
-async 
 function updateQuickBar() {
   const boxes = [...document.querySelectorAll('[data-node-check]:checked')];
   const bar = document.getElementById('quickBar');
@@ -1437,7 +1434,7 @@ async function quickPower(action) {
   clearQuick();
 }
 
-function openBulk() {
+async function openBulk() {
   const nodes = await fetch('/api/current').then(r=>r.json());
   bulkList.innerHTML = nodes.map(n =>
     `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
