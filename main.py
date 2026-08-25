@@ -2,12 +2,11 @@ import time
 import threading
 import os
 from typing import Any, Dict, List
-from datetime import datetime
 
 import uvicorn
 import config
 import database
-from database import log_alert, log_activity, ack_alert, prune_old_logs
+from database import log_alert, log_activity, ack_alert
 from hardware import HardwareManager
 from monitor import ProxmoxManager
 from logging_setup import setup_logging
@@ -15,12 +14,10 @@ from app import app as fastapi_app, lcd_state
 
 BUZZER_TEST_FLAG = "/tmp/pve_buzzer_test"
 
-
 def fmt_rate(kbps: float) -> str:
     if kbps >= 1024:
         return f"{kbps/1024:4.1f}M"
     return f"{kbps:4.0f}K"
-
 
 def fmt_uptime(secs: int) -> str:
     d = secs // 86400
@@ -31,19 +28,6 @@ def fmt_uptime(secs: int) -> str:
     if h > 0:
         return f"{h}h {m:02d}m"
     return f"{m}m"
-
-
-def get_pi_ip() -> str:
-    try:
-        import socket
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "?.?.?.?"
-
 
 def main():
     cfg = config.load_config()
@@ -73,26 +57,15 @@ def main():
     hw = HardwareManager(cfg)
     pve = ProxmoxManager(cfg["nodes"])
 
-    # Boot splash
-    try:
-        hw.force_display(" PVE Node Mon  ", "   starting... ")
-        time.sleep(1.2)
-        hw.force_display(" PVE Node Mon  ", "     ready     ")
-        time.sleep(0.8)
-    except Exception:
-        pass
-
     all_metrics: List[Dict[str, Any]] = []
     current_idx = min(cfg.get("default_node_idx", 0), max(0, len(cfg["nodes"]) - 1))
     stop = threading.Event()
     alert_cooldown = 0.0
     last_cfg_check = 0.0
     alerting = False
-    escalation_level = 0
-    last_prune = 0.0
 
     def poller():
-        nonlocal all_metrics, last_prune
+        nonlocal all_metrics
         while not stop.is_set():
             cfg_now = config.load_config()
             if len(cfg_now.get("nodes", [])) != len(pve.clients):
@@ -108,13 +81,6 @@ def main():
                     )
                 except Exception as e:
                     log.error("DB: %s", e)
-            # prune roughly hourly
-            if time.time() - last_prune > 3600:
-                try:
-                    prune_old_logs(cfg_now.get("retention_days", 14))
-                    last_prune = time.time()
-                except Exception:
-                    pass
             stop.wait(cfg_now.get("log_interval", 10))
 
     threading.Thread(target=poller, daemon=True).start()
@@ -125,7 +91,7 @@ def main():
     log.info("Web UI → http://0.0.0.0:8000")
 
     page = 0
-    TOTAL = 7
+    TOTAL = 5
     in_settings = False
     settings_idx = 0
     last_flash = time.time()
@@ -153,20 +119,6 @@ def main():
             g = hw.read_gesture()
             metrics = all_metrics[current_idx] if all_metrics else {"online": False, "name": "?"}
 
-            # Emergency mute: long-hold while alerting
-            if g == "HOLD" and alerting:
-                hw.alert_silenced = True
-                alerting = False
-                escalation_level = 0
-                hw.beep(0.15, 3)
-                try:
-                    ack_alert()
-                    log_activity("emergency_mute", "all", "hardware")
-                except Exception:
-                    pass
-                last_activity = now
-                g = None
-
             if lcd_state.get("force_flash"):
                 flash_active = True
                 last_flash = now
@@ -186,12 +138,20 @@ def main():
             if g == "DOUBLE" and alerting:
                 hw.alert_silenced = True
                 alerting = False
-                escalation_level = 0
                 hw.beep(0.05, 1)
                 last_activity = now
                 try:
                     ack_alert(node_name=metrics.get("name"))
-                    log_activity("alert_ack", str(metrics.get("name", "")), "hardware")
+                    log_activity("alert_ack", str(metrics.get("name","")), "hardware")
+                except Exception:
+                    pass
+                try:
+                    ack_alert(node_name=metrics.get("name"))
+                    log_activity("alert_ack", metrics.get("name", ""), "hardware")
+                except Exception:
+                    pass
+                try:
+                    database.ack_alert(node_name=metrics.get("name"))
                 except Exception:
                     pass
             elif g == "DOUBLE" and not in_settings:
@@ -239,20 +199,13 @@ def main():
                                 ok = client.power("shutdown")
                                 hw.alert_tone()
                                 log.info("Shutdown sent to %s: %s", name, ok)
-                                try:
-                                    log_activity("shutdown", str(name), "hardware")
-                                except Exception:
-                                    pass
+                                try: log_activity("shutdown", str(name), "hardware")
+                                except: pass
                             confirm_shutdown = False
                     config.save_config(cfg)
                     hw.beep(0.07)
             elif g == "SINGLE":
-                enabled = cfg.get("lcd_pages_enabled") or list(range(TOTAL))
-                if page in enabled:
-                    idx = enabled.index(page)
-                    page = enabled[(idx + 1) % len(enabled)]
-                else:
-                    page = enabled[0] if enabled else 0
+                page = (page + 1) % TOTAL
                 lcd_state["page"] = page
             elif g == "HOLD" and not in_settings:
                 current_idx = (current_idx + 1) % max(1, len(all_metrics) or 1)
@@ -263,28 +216,10 @@ def main():
             if confirm_shutdown and now - confirm_timer > 5:
                 confirm_shutdown = False
 
-            # Quiet hours
-            qh = cfg.get("quiet_hours") or ""
-            in_quiet = False
-            if qh and "-" in qh:
-                try:
-                    start_s, end_s = qh.split("-", 1)
-                    now_t = datetime.now().time()
-                    start = datetime.strptime(start_s.strip(), "%H:%M").time()
-                    end = datetime.strptime(end_s.strip(), "%H:%M").time()
-                    if start <= end:
-                        in_quiet = start <= now_t <= end
-                    else:
-                        in_quiet = now_t >= start or now_t <= end
-                except Exception:
-                    pass
-            if in_quiet:
-                hw.alert_silenced = True
-
             # ALERTS
             alerting = False
             ram_pct = 0.0
-            if metrics.get("online") and not cfg.get("quiet_mode") and not in_quiet:
+            if metrics.get("online") and not cfg.get("quiet_mode"):
                 ncfg = next((x for x in cfg.get("nodes", []) if x.get("name") == metrics.get("name")), {})
                 cpu_a = ncfg["cpu_alert"] if ncfg.get("cpu_alert") is not None else cfg.get("cpu_alert", 85)
                 ram_a = ncfg["ram_alert"] if ncfg.get("ram_alert") is not None else cfg.get("ram_alert", 90)
@@ -294,11 +229,7 @@ def main():
                     alerting = True
                     repeat = cfg.get("alert_repeat_sec", 25)
                     if not hw.alert_silenced and now - alert_cooldown > repeat:
-                        escalation_level = min(escalation_level + 1, 3)
-                        if escalation_level <= 1:
-                            hw.beep(0.06, 2)
-                        else:
-                            hw.alert_tone()
+                        hw.alert_tone()
                         alert_cooldown = now
                         try:
                             atype = "cpu" if metrics["cpu"] >= cpu_a else ("ram" if ram_pct >= ram_a else "disk")
@@ -309,7 +240,6 @@ def main():
                             pass
                 else:
                     hw.alert_silenced = False
-                    escalation_level = 0
 
             # DISPLAY
             if in_settings:
@@ -343,36 +273,27 @@ def main():
                     flash_active = False
                     lcd_state["mode"] = "PAGES"
                     if alerting and not hw.alert_silenced:
+                        # centered ALERT + one-line metrics
                         line2 = f"C{metrics['cpu']:.0f} R{ram_pct:.0f} D{metrics['disk_pct']:.0f}"
                         hw.force_display("     ALERT     ", f"{line2:^16}")
                     elif not metrics.get("online"):
                         hw.display(" System Offline", f"{(metrics.get('name') or '')[:16]:^16}")
                     else:
-                        # page 0 left-aligned; all others centered
                         if page == 0:
-                            hw.display(
-                                f"CPU: {metrics['cpu']:5.1f}%    ",
-                                f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G",
-                            )
+                            hw.display(f"CPU: {metrics['cpu']:5.1f}%    ", f"RAM: {metrics['ram_used']:4.1f}/{metrics['ram_total']:4.1f}G")
                         elif page == 1:
-                            hw.display(f"{'DISK / VMs':^16}",
-                                       f"{metrics['disk_pct']:5.1f}%   {metrics['active_vms']:2d} VMs")
+                            hw.display(f"Disk: {metrics['disk_pct']:5.1f}%   ", f"VMs : {metrics['active_vms']:3d}      ")
                         elif page == 2:
                             up = fmt_rate(metrics["net_out"])
                             dn = fmt_rate(metrics["net_in"])
-                            hw.display(f"{'NET  Up / Dn':^16}", f"{up} / {dn}")
+                            hw.display(f"Up : {up}      ", f"Dn : {dn}      ")
                         elif page == 3:
                             uptime = fmt_uptime(metrics.get("uptime", 0))
-                            hw.display(f"{'UPTIME':^16}", f"{uptime:^16}")
-                        elif page == 4:
-                            load1 = metrics.get("load1") or 0
-                            hw.display(f"{'LOAD 1m':^16}", f"{float(load1):^16.2f}")
-                        elif page == 5:
-                            top = metrics.get("top_vm") or "—"
-                            hw.display(f"{'TOP VM':^16}", f"{str(top)[:16]:^16}")
+                            hw.display(f" Uptime {uptime:>7} ", f"{(metrics.get('name') or '')[:16]:^16}")
                         else:
-                            pi = get_pi_ip()
-                            hw.display(f"{'THIS PI':^16}", f"{pi:^16}")
+                            ip = (metrics.get("ip") or "?")[:16]
+                            ntype = (metrics.get("type") or "server")[:8]
+                            hw.display(f"{ip:<16}", f"  {ntype:^12}  ")
 
             lcd_state["last_lines"] = hw.get_display_text()
             lcd_state["page"] = page
@@ -386,7 +307,6 @@ def main():
         stop.set()
         hw.cleanup()
         log.info("=== Stopped ===")
-
 
 if __name__ == "__main__":
     main()

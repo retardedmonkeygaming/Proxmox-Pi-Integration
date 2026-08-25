@@ -3,7 +3,6 @@ from typing import Optional, List, Dict, Any
 
 DB_FILE = "monitor.db"
 
-
 def init_db() -> None:
     conn = sqlite3.connect(DB_FILE, timeout=15)
     cur = conn.cursor()
@@ -57,7 +56,6 @@ def init_db() -> None:
     conn.commit()
     conn.close()
 
-
 def log_server_metrics(node_name, cpu, ram_u, ram_t, disk, net_in, net_out, vms, online=1):
     conn = sqlite3.connect(DB_FILE, timeout=15)
     cur = conn.cursor()
@@ -70,7 +68,6 @@ def log_server_metrics(node_name, cpu, ram_u, ram_t, disk, net_in, net_out, vms,
     conn.commit()
     conn.close()
 
-
 def log_alert(node_name: str, alert_type: str, message: str, value: float = 0, threshold: float = 0):
     conn = sqlite3.connect(DB_FILE, timeout=15)
     cur = conn.cursor()
@@ -80,7 +77,6 @@ def log_alert(node_name: str, alert_type: str, message: str, value: float = 0, t
     """, (node_name, alert_type, message, value, threshold))
     conn.commit()
     conn.close()
-
 
 def ack_alert(alert_id: int = None, node_name: str = None):
     conn = sqlite3.connect(DB_FILE, timeout=15)
@@ -94,7 +90,6 @@ def ack_alert(alert_id: int = None, node_name: str = None):
     conn.commit()
     conn.close()
 
-
 def get_alerts(limit: int = 50, unacked_only: bool = False) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE, timeout=15)
     conn.row_factory = sqlite3.Row
@@ -106,7 +101,6 @@ def get_alerts(limit: int = 50, unacked_only: bool = False) -> List[Dict]:
     conn.close()
     return [dict(r) for r in rows]
 
-
 def log_activity(action: str, detail: str = "", source: str = "system"):
     conn = sqlite3.connect(DB_FILE, timeout=15)
     cur = conn.cursor()
@@ -115,25 +109,12 @@ def log_activity(action: str, detail: str = "", source: str = "system"):
     conn.commit()
     conn.close()
 
-
 def get_activity(limit: int = 40) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE, timeout=15)
     conn.row_factory = sqlite3.Row
     rows = conn.execute("SELECT * FROM activity_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
-
-
-def prune_old_logs(days: int = 14):
-    """Keep only the last N days of server_logs."""
-    conn = sqlite3.connect(DB_FILE, timeout=15)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM server_logs WHERE timestamp < datetime('now', ?)", (f"-{days} days",))
-    deleted = cur.rowcount
-    conn.commit()
-    conn.close()
-    return deleted
-
 
 def get_logs_range(node: str = None, minutes: int = 60, limit: int = 200) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE, timeout=15)

@@ -8,7 +8,6 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 log = logging.getLogger("pve_node_monitor")
 
-
 class NodeClient:
     def __init__(self, name: str, ip: str, node: str, user: str, password: str, ntype: str = "server"):
         self.name = name
@@ -23,8 +22,6 @@ class NodeClient:
         self.session.verify = False
         self.last_ok = 0.0
         self.online = False
-        self._top_cpu = -1.0
-        self._top_name = "—"
 
     def authenticate(self) -> bool:
         try:
@@ -49,8 +46,6 @@ class NodeClient:
         return {"PVEAuthCookie": self.ticket or ""}
 
     def get_stats(self) -> Optional[Dict[str, Any]]:
-        self._top_cpu = -1.0
-        self._top_name = "—"
         if not self.ticket and not self.authenticate():
             self.online = False
             return None
@@ -70,11 +65,6 @@ class NodeClient:
 
             d = r.json()["data"]
             cpu = round(float(d["cpu"]) * 100, 1)
-            load1 = 0.0
-            try:
-                load1 = round(float(d.get("loadavg") or d.get("wait") or 0), 2)
-            except Exception:
-                pass
             ram_u = round(d["memory"]["used"] / 1024**3, 1)
             ram_t = round(d["memory"]["total"] / 1024**3, 1)
             disk = round((d["rootfs"]["used"] / d["rootfs"]["total"]) * 100, 1)
@@ -87,14 +77,7 @@ class NodeClient:
                     headers=self._h(), cookies=self._c(), timeout=5,
                 )
                 if rr.status_code == 200:
-                    guests = rr.json().get("data", [])
-                    active += sum(1 for g in guests if g.get("status") == "running")
-                    for g in guests:
-                        if g.get("status") == "running":
-                            c = float(g.get("cpu", 0) or 0)
-                            if c > self._top_cpu:
-                                self._top_cpu = c
-                                self._top_name = (g.get("name") or str(g.get("vmid")))[:14]
+                    active += sum(1 for g in rr.json().get("data", []) if g.get("status") == "running")
 
             net_in = net_out = 0.0
             try:
@@ -119,17 +102,10 @@ class NodeClient:
                 "ip": self.ip,
                 "node": self.node,
                 "type": self.ntype,
-                "cpu": cpu,
-                "ram_used": ram_u,
-                "ram_total": ram_t,
-                "disk_pct": disk,
-                "active_vms": active,
-                "net_in": net_in,
-                "net_out": net_out,
-                "uptime": uptime,
-                "online": True,
-                "load1": load1,
-                "top_vm": self._top_name,
+                "cpu": cpu, "ram_used": ram_u, "ram_total": ram_t,
+                "disk_pct": disk, "active_vms": active,
+                "net_in": net_in, "net_out": net_out,
+                "uptime": uptime, "online": True,
             }
         except Exception as e:
             log.debug("%s stats: %s", self.name, e)
@@ -151,14 +127,11 @@ class NodeClient:
             return False
 
     def test_connection(self) -> Dict[str, Any]:
-        t0 = time.time()
+        import time as _t
+        t0 = _t.time()
         ok = self.authenticate()
-        ms = round((time.time() - t0) * 1000)
-        return {
-            "ok": ok,
-            "message": "Connected" if ok else "Auth failed – check user/password/realm",
-            "latency_ms": ms,
-        }
+        ms = round((_t.time() - t0) * 1000)
+        return {"ok": ok, "message": "Connected" if ok else "Auth failed", "latency_ms": ms}
 
     def list_guests(self):
         if not self.ticket and not self.authenticate():
@@ -210,7 +183,7 @@ class ProxmoxManager:
         self.clients = [
             NodeClient(
                 n["name"], n["ip"], n["node"], n["user"], n["password"],
-                n.get("type", "server"),
+                n.get("type", "server")
             )
             for n in nodes_cfg
         ]
@@ -219,7 +192,7 @@ class ProxmoxManager:
         self.clients = [
             NodeClient(
                 n["name"], n["ip"], n["node"], n["user"], n["password"],
-                n.get("type", "server"),
+                n.get("type", "server")
             )
             for n in nodes_cfg
         ]
@@ -237,7 +210,6 @@ class ProxmoxManager:
                     "cpu": 0, "ram_used": 0, "ram_total": 0,
                     "disk_pct": 0, "active_vms": 0,
                     "net_in": 0, "net_out": 0, "uptime": 0,
-                    "load1": 0, "top_vm": "—",
                 })
         return results
 
